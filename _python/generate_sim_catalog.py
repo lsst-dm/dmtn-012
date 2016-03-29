@@ -16,7 +16,7 @@ import time
 photons_per_adu = 1e4  # used only to approximate the effect of photon shot noise, if photon_noise=True
 
 
-def cat_image(catalog=None, bbox=None, name=None, psf=None, pixel_scale=None, pad_image=1.5,
+def cat_image(catalog=None, name=None, psf=None, pixel_scale=None, pad_image=1.5, x_size=None, y_size=None,
               sky_noise=0.0, instrument_noise=0.0, photon_noise=False,
               dcr_flag=False, band_name='g', sed_list=None,
               astrometric_error=None, edge_dist=None, **kwargs):
@@ -35,14 +35,14 @@ def cat_image(catalog=None, bbox=None, name=None, psf=None, pixel_scale=None, pa
         else:
             edge_dist = 5 * psf.getFWHM() * fwhm_to_sigma / pixel_scale
     kernel_radius = np.ceil(5 * psf.getFWHM() * fwhm_to_sigma / pixel_scale)
+    bright_sigma_threshold = 3.0
+    bright_flux_threshold = 0.1
     # print("Kernel radius used: ", kernel_radius)
     if catalog is None:
-        catalog = cat_sim(bbox=bbox, name=name, edge_distance=edge_dist, **kwargs)
+        catalog = cat_sim(x_size=x_size, y_size=y_size, name=name, edge_distance=edge_dist, **kwargs)
     schema = catalog.getSchema()
     n_star = len(catalog)
     bandpass = load_bandpass(band_name=band_name, **kwargs)
-    x_size, y_size = bbox.getDimensions()
-    x0, y0 = bbox.getBegin()
     if name is None:
         # If no name is supplied, find the first entry in the schema in the format *_flux
         schema_entry = schema.extract("*_flux", ordered='true')
@@ -59,7 +59,6 @@ def cat_image(catalog=None, bbox=None, name=None, psf=None, pixel_scale=None, pa
     temperatureKey = schema.find("temperature").key
     metalKey = schema.find("metallicity").key
     gravityKey = schema.find("gravity").key
-    x0, y0 = bbox.getBegin()
     # if catalog.isContiguous()
     flux = catalog[fluxKey] / psf.getFlux()
     temperatures = catalog[temperatureKey]
@@ -77,10 +76,14 @@ def cat_image(catalog=None, bbox=None, name=None, psf=None, pixel_scale=None, pa
         flux_arr[_i, :] = np.array([flux_val for flux_val in star_spectrum])
     flux_tot = np.sum(flux_arr, axis=1)
     if n_star > 3:
-        cat_sigma = np.std(flux_tot[flux_tot - np.median(flux_tot) < 3.0 * np.std(flux_tot)])
-        i_bright = (np.where(flux_tot - np.median(flux_tot) > 3.0 * cat_sigma))[0]
+        cat_sigma = np.std(flux_tot[flux_tot - np.median(flux_tot)
+                                    < bright_sigma_threshold * np.std(flux_tot)])
+        i_bright = (np.where(flux_tot - np.median(flux_tot) > bright_sigma_threshold * cat_sigma))[0]
+        if len(i_bright) > 0:
+            flux_faint = np.sum(flux_arr) - np.sum(flux_tot[i_bright])
+            i_bright = [i_b for i_b in i_bright if flux_tot[i_b] > bright_flux_threshold * flux_faint]
         n_bright = len(i_bright)
-        i_faint = (np.where(flux_tot - np.median(flux_tot) <= 3.0 * cat_sigma))[0]
+        i_faint = [_i for _i in range(n_star) if _i not in i_bright]
         n_faint = len(i_faint)
     else:
         i_bright = np.arange(n_star)
@@ -95,8 +98,8 @@ def cat_image(catalog=None, bbox=None, name=None, psf=None, pixel_scale=None, pa
         flux_bright = flux_arr[i_bright, :]
         flux_arr = flux_arr[i_faint, :]
 
-    xv = catalog.getX() - x0
-    yv = catalog.getY() - y0
+    xv = catalog.getX()
+    yv = catalog.getY()
 
     return_image = np.zeros((y_size, x_size))
     if dcr_flag:
@@ -257,7 +260,8 @@ def dcr_generator(bandpass, pixel_scale=None, elevation=None, azimuth=None, **kw
         yield((dx, dy))
 
 
-def cat_sim(bbox=None, seed=None, n_star=None, n_galaxy=None, edge_distance=10, name=None, **kwargs):
+def cat_sim(x_size=None, y_size=None, seed=None, n_star=None, n_galaxy=None,
+            edge_distance=10, name=None, **kwargs):
     """Wrapper function that generates a semi-realistic catalog of stars."""
     schema = afwTable.SourceTable.makeMinimalSchema()
     if name is None:
@@ -278,8 +282,8 @@ def cat_sim(bbox=None, seed=None, n_star=None, n_galaxy=None, edge_distance=10, 
     schema.addField("dust", type="D")
     schema.getAliasMap().set('slot_Centroid', name + '_Centroid')
 
-    x_size, y_size = bbox.getDimensions()
-    x0, y0 = bbox.getBegin()
+    x0 = 0
+    y0 = 0
     star_properties = stellar_distribution(seed=seed, n_star=n_star, **kwargs)
     temperature = star_properties[0]
     flux = star_properties[1]
