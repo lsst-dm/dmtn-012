@@ -39,7 +39,8 @@ def cat_image(catalog=None, name=None, psf=None, pixel_scale=None, pad_image=1.5
     bright_flux_threshold = 0.1
     # print("Kernel radius used: ", kernel_radius)
     if catalog is None:
-        catalog = cat_sim(x_size=x_size, y_size=y_size, name=name, edge_distance=edge_dist, **kwargs)
+        catalog = cat_sim(x_size=x_size, y_size=y_size, name=name, edge_distance=edge_dist,
+                          pixel_scale=pixel_scale, **kwargs)
     schema = catalog.getSchema()
     n_star = len(catalog)
     bandpass = load_bandpass(band_name=band_name, **kwargs)
@@ -133,7 +134,7 @@ def cat_image(catalog=None, name=None, psf=None, pixel_scale=None, pad_image=1.5
     return(return_image)
 
 
-def convolve_dcr_image(flux_arr, x_loc, y_loc, bandpass=None, x_size=None, y_size=None,
+def convolve_dcr_image(flux_arr, x_loc, y_loc, bandpass=None, x_size=None, y_size=None, seed=None,
                        psf=None, pad_image=1.5, pixel_scale=None, kernel_radius=None,
                        oversample_image=1, photon_noise=False, sky_noise=0.0, verbose=True, **kwargs):
     """Wrapper to call fast_dft with multiple DCR planes."""
@@ -165,11 +166,15 @@ def convolve_dcr_image(flux_arr, x_loc, y_loc, bandpass=None, x_size=None, y_siz
         else:
             print("Time to model %i %sstars: [%0.3fs | %0.5fs per star]"
                   % (n_star, bright_star, timing_model, timing_model / n_star))
+    rand_gen = np.random
+    if seed is not None:
+        rand_gen.seed(seed - 1)
     # The images are purely real, so we can save time by using the real FFT,
     # which uses only half of the complex plane
     convol = np.zeros((y_size_use, x_size_use // 2 + 1), dtype='complex64')
     dcr_gen = dcr_generator(bandpass, pixel_scale=pixel_scale_use, **kwargs)
     timing_fft = -time.time()
+
     for _i, offset in enumerate(dcr_gen):
         source_image_use = source_image[_i]
 
@@ -180,7 +185,7 @@ def convolve_dcr_image(flux_arr, x_loc, y_loc, bandpass=None, x_size=None, y_siz
             base_noise *= np.sqrt(np.abs(source_image_use) / photons_per_adu)
             source_image_use += base_noise
         if sky_noise > 0:
-            source_image_use += (np.random.normal(scale=sky_noise, size=(y_size_use, x_size_use))
+            source_image_use += (rand_gen.normal(scale=sky_noise, size=(y_size_use, x_size_use))
                                  / np.sqrt(bandpass_nstep(bandpass)))
         convol += rfft2(source_image_use) * rfft2(psf_image.array)
     return_image = np.real(fftshift(irfft2(convol)))
@@ -191,9 +196,9 @@ def convolve_dcr_image(flux_arr, x_loc, y_loc, bandpass=None, x_size=None, y_siz
     return(return_image[y0:y1:oversample_image, x0:x1:oversample_image] * oversample_image**2)
 
 
-def convolve_image(flux_arr, x_loc, y_loc, x_size=None, y_size=None,
+def convolve_image(flux_arr, x_loc, y_loc, x_size=None, y_size=None, seed=None,
                    psf=None, pad_image=1.5, pixel_scale=None, kernel_radius=None,
-                   oversample_image=1, photon_noise=False, sky_noise=0.0, **kwargs):
+                   oversample_image=1, photon_noise=False, sky_noise=0.0, verbose=True, **kwargs):
     """Wrapper to call fast_dft with no DCR planes."""
     x_size_use = int(x_size * pad_image)
     y_size_use = int(y_size * pad_image)
@@ -216,11 +221,16 @@ def convolve_image(flux_arr, x_loc, y_loc, x_size=None, y_size=None,
         bright_star = "bright "
     else:
         bright_star = ""
-    if n_star == 1:
-        print("Time to model %i %sstar: [%0.3fs]" % (n_star, bright_star, timing_model))
-    else:
-        print("Time to model %i %sstars: [%0.3fs | %0.5fs per star]"
-              % (n_star, bright_star, timing_model, timing_model / n_star))
+    if verbose:
+        if n_star == 1:
+            print("Time to model %i %sstar: [%0.3fs]" % (n_star, bright_star, timing_model))
+        else:
+            print("Time to model %i %sstars: [%0.3fs | %0.5fs per star]"
+                  % (n_star, bright_star, timing_model, timing_model / n_star))
+
+    rand_gen = np.random
+    if seed is not None:
+        rand_gen.seed(seed - 1)
     psf_image = psf.drawImage(scale=pixel_scale_use, method='fft', offset=[0, 0],
                               nx=x_size_use, ny=y_size_use, use_true_center=False)
     if photon_noise:
@@ -228,12 +238,13 @@ def convolve_image(flux_arr, x_loc, y_loc, x_size=None, y_size=None,
         base_noise *= np.sqrt(np.abs(source_image) / photons_per_adu)
         source_image += base_noise
     if sky_noise > 0:
-        source_image += np.random.normal(scale=sky_noise, size=(y_size_use, x_size_use))
+        source_image += rand_gen.normal(scale=sky_noise, size=(y_size_use, x_size_use))
     timing_fft = -time.time()
     convol = rfft2(source_image) * rfft2(psf_image.array)
     return_image = np.real(fftshift(irfft2(convol)))
     timing_fft += time.time()
-    print("FFT timing (single plane): [%0.3fs]" % (timing_fft))
+    if verbose:
+        print("FFT timing (single plane): [%0.3fs]" % (timing_fft))
     return(return_image[y0:y1:oversample_image, x0:x1:oversample_image] * oversample_image**2)
 
 
@@ -261,7 +272,7 @@ def dcr_generator(bandpass, pixel_scale=None, elevation=None, azimuth=None, **kw
 
 
 def cat_sim(x_size=None, y_size=None, seed=None, n_star=None, n_galaxy=None,
-            edge_distance=10, name=None, **kwargs):
+            edge_distance=10, name=None, pixel_scale=None, **kwargs):
     """Wrapper function that generates a semi-realistic catalog of stars."""
     schema = afwTable.SourceTable.makeMinimalSchema()
     if name is None:
@@ -282,18 +293,25 @@ def cat_sim(x_size=None, y_size=None, seed=None, n_star=None, n_galaxy=None,
     schema.addField("dust", type="D")
     schema.getAliasMap().set('slot_Centroid', name + '_Centroid')
 
-    x0 = 0
-    y0 = 0
-    star_properties = stellar_distribution(seed=seed, n_star=n_star, **kwargs)
+    x_size_gen = x_size - 2 * edge_distance
+    y_size_gen = y_size - 2 * edge_distance
+    star_properties = stellar_distribution(seed=seed, n_star=n_star, pixel_scale=pixel_scale,
+                                           x_size=x_size_gen, y_size=y_size_gen, **kwargs)
     temperature = star_properties[0]
     flux = star_properties[1]
     metallicity = star_properties[2]
     surface_gravity = star_properties[3]
+    x = star_properties[4]
+    y = star_properties[5]
+    """
+    x0 = 0
+    y0 = 0
     rand_gen = np.random
     if seed is not None:
         rand_gen.seed(seed + 1)  # ensure that we use a different seed than stellar_distribution.
     x = rand_gen.uniform(x0 + edge_distance, x0 + x_size - edge_distance, n_star)
     y = rand_gen.uniform(y0 + edge_distance, y0 + y_size - edge_distance, n_star)
+    """
 
     catalog = afwTable.SourceCatalog(schema)
     fluxKey = schema.find(fluxName).key
@@ -304,7 +322,7 @@ def cat_sim(x_size=None, y_size=None, seed=None, n_star=None, n_galaxy=None,
     gravityKey = schema.find("gravity").key
     centroidKey = afwTable.Point2DKey(schema["slot_Centroid"])
     for _i in range(n_star):
-        source_test_centroid = afwGeom.Point2D(x[_i], y[_i])
+        source_test_centroid = afwGeom.Point2D(x[_i] + edge_distance, y[_i] + edge_distance)
         source = catalog.addNew()
         source.set(fluxKey, flux[_i])
         source.set(centroidKey, source_test_centroid)
@@ -485,7 +503,8 @@ def wavelength_iterator(bandpass, use_midpoint=False):
         wave_start = wave_end
 
 
-def stellar_distribution(seed=None, n_star=None, hottest_star='A', coolest_star='M', verbose=True, **kwargs):
+def stellar_distribution(seed=None, n_star=None, hottest_star='A', coolest_star='M',
+                         x_size=None, y_size=None, pixel_scale=None, verbose=True, **kwargs):
     """!Function that attempts to return a realistic distribution of stellar properties.
     Returns temperature, flux, metallicity, surface gravity
     temperature in units Kelvin
@@ -505,6 +524,8 @@ def stellar_distribution(seed=None, n_star=None, hottest_star='A', coolest_star=
     lum_solar = 3.846e26  # Solar luminosity, in Watts
     ly = 9.4607e15  # one light year, in meters
     pi = np.pi
+    pixel_scale_degrees = pixel_scale / 3600.0
+    max_star_dist = 1000  # light years
     luminosity_to_flux = lum_solar / (4.0 * pi * ly**2.0)
     star_type = {'M': 0, 'K': 1, 'G': 2, 'F': 3, 'A': 4, 'B': 5, 'O': 6}
     star_names = sorted(star_type.keys(), key=lambda star: star_type[star])
@@ -529,6 +550,11 @@ def stellar_distribution(seed=None, n_star=None, hottest_star='A', coolest_star=
     surface_gravity = []
     n_star = []
     flux_star = []
+    x_star = []
+    y_star = []
+    z_star = []
+    x_scale = np.sin(np.radians(x_size * pixel_scale_degrees)) / 2
+    y_scale = np.sin(np.radians(y_size * pixel_scale_degrees)) / 2
     for _i in range(n_star_type):
         inds = np.where((star_sort < star_prob[_i + 1]) * (star_sort > star_prob[_i]))
         inds = inds[0]  # np.where returns a tuple of two arrays
@@ -537,8 +563,18 @@ def stellar_distribution(seed=None, n_star=None, hottest_star='A', coolest_star=
         for ind in inds:
             temp_use = rand_gen.uniform(temperature_range[_i][0], temperature_range[_i][1])
             lum_use = rand_gen.uniform(luminosity_scale[_i][0], luminosity_scale[_i][1])
-            # Assume that all stars are randomly distributed between 1 and 100 light years away
-            distance_attenuation = rand_gen.uniform(1.0, 100.0) ** 2.0
+            bounds_test = True
+            while bounds_test:
+                x_dist = rand_gen.uniform(-max_star_dist * x_scale, max_star_dist * x_scale)
+                z_dist = rand_gen.uniform(1.0, max_star_dist)
+                if np.abs(x_dist) < x_scale * z_dist:
+                    y_dist = rand_gen.uniform(-max_star_dist * y_scale, max_star_dist * y_scale)
+                    if np.abs(y_dist) < y_scale * z_dist:
+                        bounds_test = False
+            x_star.append(x_size / 2 + np.degrees(np.arctan(x_dist / z_dist)) / pixel_scale_degrees)
+            y_star.append(y_size / 2 + np.degrees(np.arctan(y_dist / z_dist)) / pixel_scale_degrees)
+            z_star.append(z_dist)
+            distance_attenuation = z_dist ** 2.0
             flux_use = lum_use * luminosity_to_flux / distance_attenuation
             metal_use = rand_gen.uniform(metallicity_range[_i][0], metallicity_range[_i][1])
             grav_use = rand_gen.uniform(surface_gravity_range[_i][0], surface_gravity_range[_i][1])
@@ -552,8 +588,7 @@ def stellar_distribution(seed=None, n_star=None, hottest_star='A', coolest_star=
     flux_star = [100. * _f / flux_total for _f in flux_star]
     info_string = "Number and flux contribution of stars of each type:\n"
     for _i in range(n_star_type):
-        info_string += str(" [%s %i| %0.2f%%]" % (star_names[_i], n_star[_i], flux_star[_i]))
+        info_string += str(" [%s %i| %0.2f%%]" % (star_names[_i + s_cool], n_star[_i], flux_star[_i]))
     if verbose:
         print(info_string)
-
-    return((temperature, flux, metallicity, surface_gravity))
+    return((temperature, flux, metallicity, surface_gravity, x_star, y_star))
