@@ -86,19 +86,18 @@ Note that the very hot and bright B type stars have a DCR dipole in the opposite
    :target: ../../_static/dcr_img10000_linear.png
    :alt: Difference of two simulated images, with dipoles caused by DCR
 
-   Difference of two simulated images of the same 10,000 stars, with the reference image at airmass 1.0 and the other at airmass 1.06.
+   Difference of two simulated images of the same 10,000 stars, with the reference image at airmass 1.0 and the science image at airmass 1.06. 
 
 .. _section-headings-sim-cat:
 
 Simulated catalogs
 ==================
-StarFast begins by creating a simulated catalog of stars with properties representative of the local population. 
-Properties are drawn from random distributions for the stellar types O-M in proportion to their local abundance, and each star is set at a random distance from 1-100 light years. 
+StarFast begins by creating a simulated catalog of stars with properties drawn from random distributions for the stellar types O-M in proportion to their local abundance.
 Simulated properties include temperature (in degrees K), luminosity (relative to solar), surface gravity (relative to solar), and metallicity (log, relative to solar). 
 These properties are matched to Kurucz model SEDs from GalSim, which are scaled by the luminosity of each star and attenuated by distance and the instrument bandpass throughput to yield fluxes in Janskys. 
 Alternately, a simple blackbody radiation spectrum (with the bandpass) can be used. 
 
-Coordinates are also chosen from a random distribution, with no attempt at simulating realistic clustering. 
+Each star is randomly placed within a simulated volume of observable space from which pixel coordinates and attenuation from distance are calculated, though no attempt is made to simulate realistic clustering.
 All of the random distributions, including stellar properties and coordinates, can be initialized from a user-supplied seed value, which allows for repeated simulations of the same patch of sky under different conditions. 
 Simulated catalogs may also be returned and saved, so they may be modified by external tools if desired, and those saved catalogs may be supplied in place of generating a new random catalog from a seed.
 
@@ -107,6 +106,23 @@ Simulated catalogs may also be returned and saved, so they may be modified by ex
 
 Implementation
 ==============
+For those who don't care for the gory details, StarFast uses a variant of standard FFT convolution with a PSF to simulate images. 
+It plays a few tricks, however, to gain speed and avoid the common aliasing and ringing artifacts common to FFTs.
+
+
+The simulated catalogs are gridded without performing a convolution with a PSF in the first step. 
+Instead, for each pixel (y_i, x_i) in the image plane, the function (sin(-pi * X) / (pi * (x_i - X))) * (sin(-pi * Y) / (pi * (y_i - Y))) is computed for each source with floating point position (Y, X), which yields the identical result as taking the direct Fourier transform of a delta function at (Y, X) followed by an FFT back to the image plane, but without folding. 
+If multiple images have a star at precisely the same location but with different amplitudes, these "image-space Fourier components" can be re-used with a simple scaling. 
+Additionally, because the function falls off as 1 / x_i * y_i off the column and row of pixels that the star lands in, it's value quickly becomes insignificant. 
+This means that, for faint stars, we only need to evaluate the function for a small percentage of the total image pixels: for a slice in x over all y, a slice in y for all x, and a small radius of pixels all centered on the star. 
+Very bright stars are evaluated separately using all pixels, and at twice the resolution to eliminate FFT artifacts.
+
+
+To properly treat effects that vary over the bandwidth of a filter, StarFast constructs many planes for each image, each with a restricted wavelength range, and the SED of each star is integrated over the filter for the restricted wavelength range to produce a vector of fluxes. 
+These sub-band flux values could each be gridded and convolved with the PSF separately, with the final images simply stacked to produce one image encompassing the full bandwidth, but this is very inefficient. 
+Instead, StarFast generates the image-space Fourier components described above for each star, and scales the values by the sub-band amplitude for each plane. 
+Each plane gets it's own PSF model, and if there is a wavelength dependant position shift (such as with DCR), that is included in the PSF.
+Finally, the images are convolved with their PSFs using FFTs, and stacked.
 
 
 .. _section-headings-uses:
@@ -127,6 +143,7 @@ Dipole Measurement
 
 Difference Imaging / Image Coaddition
 -------------------------------------
+Many realizations of the same sky can be constructed, under many different conditions 
 
 Transient Detection
 -------------------
