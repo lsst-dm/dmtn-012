@@ -46,7 +46,7 @@ This technical note is currently a draft!
 #########
 StarFast - A Fast Simulation Tool for Testing Algorithms
 #########
-(StarSim, SimFast, Cynthia, Simantha)
+(Other name suggestions welcome!)
 
 Overview
 ========
@@ -58,11 +58,11 @@ For wavelength-dependent effects such as DCR, each band is divided into multiple
 Sources are convolved with the PSF in Fourier space (but see :ref:`section-headings-implementation` below for details), and any sub-band planes are stacked to produce the final image. Noise may optionally be injected at any step, to simulate photon shot noise of the sources, flat spectrum sky noise, or receiver noise.
 
 Several example images are shown below, which were produced using the included iPython notebook (in _python/sim_fast example).
-Each image contains the same catalog of 10,000 stars, consisting of 7642 M, 1213 K, 751 G, 329 F, 60 A, and 5 B type stars (which can be obtained with the example notebook by setting seed = 5). 
+Each image contains the same catalog of 10,000 stars, consisting of 5124 K, 3303 G, 1255 F, 274 A, and 44 B type stars (which can be obtained with the example notebook by setting seed = 5). 
 For this simulation I have generated two LSST u-band images: a 'reference' image at an airmass of 1.00 near zenith that used a single plane, and a 'science' image at an airmass of 1.06 that used 23 planes (a wavelength resolution of 3nm).
 Each star in the simulation uses a simulated Kurucz SED from Galsim, and a Kolmogorov PSF also from Galsim.
-The reference image took just over 3 minutes to generate on a single core of a 2015 Macbook, while the the science image took roughly a minute longer despite having to simulate all 23 planes.
-In this simulation, the brightest star is over seven orders of magnitude brighter than the faintest, so the reference image is displayed on a logarithmic color scale in Figure 1 and on a clipped linear color scale in Figure 2 below. The science image is not visually different from the reference image on either color scale so only the difference image is displayed in Figure 3.
+The reference image shown in Figures 1 and 2 below took just over 3 minutes to generate on a single core of a 2015 Macbook, while the the science image took roughly a minute longer despite having to simulate all 23 planes.
+The science image is not visually different from the reference image on either color scale so only the difference image is displayed in Figure 3. 
 Note that the very hot and bright B type stars have a DCR dipole in the opposite direction of the cooler stars, which is precisely what a DCR algorithm must be designed to correct.
 
 
@@ -72,7 +72,7 @@ Note that the very hot and bright B type stars have a DCR dipole in the opposite
    :target: ../../_static/ref_img10000_log.png
    :alt: Simulated 1024x1024 image with 10,000 stars
 
-   Simulated 1024x1024 image with 10,000 stars (logarithmic color scale).
+   Simulated 1024x1024 u-band image with 10,000 stars (logarithmic color scale).
 
 .. figure:: /_static/ref_img10000_linear.png
    :name: fig-ref-img-linear
@@ -86,7 +86,7 @@ Note that the very hot and bright B type stars have a DCR dipole in the opposite
    :target: ../../_static/dcr_img10000_linear.png
    :alt: Difference of two simulated images, with dipoles caused by DCR
 
-   Difference of two simulated images of the same 10,000 stars, with the reference image at airmass 1.0 and the science image at airmass 1.06. 
+   Difference of two simulated u-band images of the same 10,000 stars, with the reference image at airmass 1.0 and the science image at airmass 1.06. 
 
 .. _section-headings-sim-cat:
 
@@ -109,11 +109,10 @@ Implementation
 For those who don't care for the gory details, StarFast uses a variant of standard FFT convolution with a PSF to simulate images. 
 It plays a few tricks, however, to gain speed and avoid the common aliasing and ringing artifacts common to FFTs.
 
-
-The simulated catalogs are gridded without performing a convolution with a PSF in the first step. 
-Instead, for each pixel (y_i, x_i) in the image plane, the function (sin(-pi * X) / (pi * (x_i - X))) * (sin(-pi * Y) / (pi * (y_i - Y))) is computed for each source with floating point position (Y, X), which yields the identical result as taking the direct Fourier transform of a delta function at (Y, X) followed by an FFT back to the image plane, but without folding. 
+In particular, the simulated catalogs are gridded without performing a convolution with a PSF in the first step. 
+Instead, for each pixel in the image plane, the 2D sinc function is computed for each star at its floating-point position, which gives the identical result as taking the direct Fourier transform of a delta function (not centered on a pixel) followed by an FFT back to the image plane, but without folding. 
 If multiple images have a star at precisely the same location but with different amplitudes, these "image-space Fourier components" can be re-used with a simple scaling. 
-Additionally, because the function falls off as 1 / x_i * y_i off the column and row of pixels that the star lands in, it's value quickly becomes insignificant. 
+Additionally, because the function falls off as 1 / x * y off the column and row of pixels that the star lands in, it's value quickly becomes insignificant. 
 This means that, for faint stars, we only need to evaluate the function for a small percentage of the total image pixels: for a slice in x over all y, a slice in y for all x, and a small radius of pixels all centered on the star. 
 Very bright stars are evaluated separately using all pixels, and at twice the resolution to eliminate FFT artifacts.
 
