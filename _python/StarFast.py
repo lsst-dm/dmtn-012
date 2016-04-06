@@ -16,10 +16,10 @@ import time
 photons_per_adu = 1e4  # used only to approximate the effect of photon shot noise, if photon_noise=True
 
 
-def cat_image(catalog=None, name=None, psf=None, pixel_scale=None, pad_image=1.5, x_size=None, y_size=None,
-              sky_noise=0.0, instrument_noise=0.0, photon_noise=False,
-              dcr_flag=False, band_name='g', sed_list=None,
-              astrometric_error=None, edge_dist=None, **kwargs):
+def star_sim(catalog=None, name=None, psf=None, pixel_scale=None, pad_image=1.5, x_size=None, y_size=None,
+             sky_noise=0.0, instrument_noise=0.0, photon_noise=False,
+             dcr_flag=False, band_name='g', sed_list=None,
+             astrometric_error=None, edge_dist=None, **kwargs):
     """!Wrapper that takes a catalog of stars and simulates an image in units of Janskys."""
     """
     if psf is None:
