@@ -55,13 +55,14 @@ It has been developed primarily with an aim to quickly generate many images affe
 
 It will generate a simulated catalog of stars (see :ref:`section-headings-sim-cat` below) and compute the flux in Janskys for each source given the instrument bandpass. 
 For wavelength-dependent effects such as DCR, each band is divided into multiple sub-band planes. 
-Sources are convolved with the PSF in Fourier space (but see :ref:`section-headings-implementation` below for details), and any sub-band planes are stacked to produce the final image. Noise may optionally be injected at any step, to simulate photon shot noise of the sources, flat spectrum sky noise, or receiver noise.
+Sources are convolved with the PSF in Fourier space (but see :ref:`section-headings-implementation` below for details), and any sub-band planes are stacked to produce the final image. 
+Noise may optionally be injected at any step, to simulate photon shot noise of the sources, flat spectrum sky noise, or noise from the electronics.
 
 Several example images are shown below, which were produced using the included iPython notebook (in _python/sim_fast example).
 Each image contains the same catalog of 10,000 stars, consisting of 5124 K, 3303 G, 1255 F, 274 A, and 44 B type stars (which can be obtained with the example notebook by setting seed = 5). 
 For this simulation I have generated two LSST u-band images: a 'reference' image at an airmass of 1.00 near zenith that used a single plane, and a 'science' image at an airmass of 1.06 that used 23 planes (a wavelength resolution of 3nm).
-Each star in the simulation uses a simulated Kurucz SED from Galsim, and a Kolmogorov PSF also from Galsim.
-The reference image shown in Figures 1 and 2 below took just over 3 minutes to generate on a single core of a 2015 Macbook, while the the science image took roughly a minute longer despite having to simulate all 23 planes.
+Each star in the simulation uses a simulated Kurucz SED from sims (https://github.com/lsst/sims_photUtils), and a Kolmogorov PSF from Galsim.
+The reference image shown in Figures 1 and 2 below took just over 3 minutes to generate on a single core of a 2015 Macbook, while the science image took roughly a minute longer despite having to simulate all 23 planes.
 The science image is not visually different from the reference image on either color scale so only the difference image is displayed in Figure 3. 
 Note that the very hot and bright B type stars have a DCR dipole in the opposite direction of the cooler stars, which is precisely what a DCR algorithm must be designed to correct.
 
@@ -86,7 +87,7 @@ Note that the very hot and bright B type stars have a DCR dipole in the opposite
    :target: ../../_static/dcr_img10000_linear.png
    :alt: Difference of two simulated images, with dipoles caused by DCR
 
-   Difference of two simulated u-band images of the same 10,000 stars, with the reference image at airmass 1.0 and the science image at airmass 1.06. 
+   Difference of two simulated u-band images of the same 10,000 stars, with the reference image at airmass 1.0 and the science image at airmass 1.20. 
 
 .. _section-headings-sim-cat:
 
@@ -97,7 +98,7 @@ Simulated properties include temperature (in degrees K), luminosity (relative to
 These properties are matched to Kurucz model SEDs from GalSim, which are scaled by the luminosity of each star and attenuated by distance and the instrument bandpass throughput to yield fluxes in Janskys. 
 Alternately, a simple blackbody radiation spectrum (with the bandpass) can be used. 
 
-Each star is randomly placed within a simulated volume of observable space from which pixel coordinates and attenuation from distance are calculated, though no attempt is made to simulate realistic clustering.
+Each star is randomly placed within a simulated volume of observable space (a 1000ly cone) from which pixel coordinates and attenuation from distance are calculated, though no attempt is made to simulate realistic clustering.
 All of the random distributions, including stellar properties and coordinates, can be initialized from a user-supplied seed value, which allows for repeated simulations of the same patch of sky under different conditions. 
 Simulated catalogs may also be returned and saved, so they may be modified by external tools if desired, and those saved catalogs may be supplied in place of generating a new random catalog from a seed.
 
