@@ -45,6 +45,11 @@ sky_noise = 0.0
 instrument_noise = 0.0
 photon_noise = False
 
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# This section for line_profiler: https://github.com/rkern/line_profiler
+# add @profile decorators to the functions you want it to profile.
+# Run with: kernprof -l profiling.py
+# see results with "python -m line_profiler profiling.py.lprof"
 star_sim(seed=seed, psf=psf, n_star=n_star, x_size=dimension, y_size=dimension,
          sky_noise=sky_noise, photon_noise=photon_noise,
          instrument_noise=instrument_noise, pixel_scale=pixel_scale, dcr_flag=False,
@@ -54,6 +59,9 @@ star_sim(seed=seed, psf=psf, n_star=n_star, x_size=dimension, y_size=dimension,
          coolest_star=coolest_star,
          sed_list=sed_list, pad_image=pad_image)
 
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# This section for cProfile.
+# uncomment this block (and comment out the above) to produce a the listed profiling stats file.
 # command = """ref_image = star_sim(seed=seed, psf=psf, n_star=n_star, x_size=dimension, y_size=dimension,
 #                      sky_noise=sky_noise, photon_noise=photon_noise,
 #                      instrument_noise=instrument_noise, pixel_scale=pixel_scale, dcr_flag=False,
@@ -62,11 +70,8 @@ star_sim(seed=seed, psf=psf, n_star=n_star, x_size=dimension, y_size=dimension,
 #                      hottest_star=hottest_star,
 #                      coolest_star=coolest_star,
 #                      sed_list=sed_list, pad_image=pad_image)"""
-
 # filename = 'ref_image.prof'
 # cProfile.run(command, filename=filename)
-
 # stats = pstats.Stats(filename)
 # stats.strip_dirs()
-
 # stats.sort_stats('cumtime').print_stats(20)
