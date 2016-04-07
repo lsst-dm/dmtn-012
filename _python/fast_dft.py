@@ -151,16 +151,13 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
             pix = np.arange(size, dtype=np.float64)
             sign = np.power(-1.0, pix)
             offset = np.floor(locs)
-
             delta = locs - offset
-
             kernel = np.zeros((len(locs), size), dtype=np.float64)
-
             for i, loc in enumerate(locs):
                 if delta[i] == 0:
                     kernel[i, :][offset[i]] = 1.0
                 else:
-                    kernel[i, :] = np.sin(-pi * loc) / (pi * (pix - loc)) * sign[i]
+                    kernel[i, :] = np.sin(-pi * loc) / (pi * (pix - loc)) * sign
             return kernel
 
         kernel_x = kernel_1d(x_loc, x_size)
