@@ -351,12 +351,13 @@ def star_gen(sed_list=None, seed=None, temperature=5600, metallicity=0.0, surfac
     def integral(generator):
         """Simple wrapper to make the math more apparent."""
         return(np.sum(var for var in generator))
+
     if sed_list is None:
         print("No sed_list supplied, using blackbody radiation spectra.")
         t_ref = [np.Inf, 0.0]
     else:
-        temperature_list = [star.temp for star in sed_list]
-        t_ref = [np.min(temperature_list), np.max(temperature_list)]
+        temperatures = np.array(star.temp for star in sed_list)
+        t_ref = [temperatures.min(), temperatures.max()]
 
     bp_wavelen, bandpass_vals = bandpass.getBandpass()
     bandpass_gen = (bp for bp in bandpass_vals)
@@ -364,7 +365,7 @@ def star_gen(sed_list=None, seed=None, temperature=5600, metallicity=0.0, surfac
 
     # If the desired temperature is outside of the range of models in sed_list, then use a blackbody.
     if temperature >= t_ref[0] and temperature <= t_ref[1]:
-        temp_weight = [np.abs(t / temperature - 1.0) for t in temperature_list]
+        temp_weight = np.abs(temperatures / temperature - 1.0)
         temp_thresh = np.min(temp_weight)
         t_inds = np.where(temp_weight <= temp_thresh)
         t_inds = t_inds[0]  # unpack tuple from np.where()
@@ -383,8 +384,8 @@ def star_gen(sed_list=None, seed=None, temperature=5600, metallicity=0.0, surfac
         def sed_integrate(sed=sed_list[sed_i], wave_start=None, wave_end=None):
             wavelengths = sed.wavelen
             flambdas = sed.flambda
-            return(integral((flambdas[_i] for _i in range(len(flambdas))
-                   if wavelengths[_i] >= wave_start and wavelengths[_i] < wave_end)))
+            waves = (wavelengths >= wave_start) & (wavelengths < wave_end)
+            return(flambdas[waves].sum())
 
         # integral over the full sed, to convert from W/m**2 to W/m**2/Hz
         sed_full_integral = sed_integrate(wave_end=np.Inf)
