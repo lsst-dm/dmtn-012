@@ -50,7 +50,7 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
     else:
         full_flag = False
 
-    def kernel_1d(locs, size):
+    def kernel_1d_gen(locs, size):
         """A generalized generator function that pre-computes the 1D sinc function values along one axis."""
         pix = np.arange(size, dtype=np.float64)
         sign = np.power(-1.0, pix)
@@ -64,8 +64,8 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
                 kernel = np.sin(-pi * loc) / (pi * (pix - loc))
                 kernel *= sign
             yield kernel
-    kernel_x_gen = kernel_1d(x_loc, x_size)
-    kernel_y_gen = kernel_1d(y_loc, y_size)
+    kernel_x_gen = kernel_1d_gen(x_loc, x_size)
+    kernel_y_gen = kernel_1d_gen(y_loc, y_size)
 
     if multi_catalog:
         def kernel_circle_inds(x_loc, y_loc, kernel_radius=None):
@@ -145,7 +145,28 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
                         model[y_i, x_i] += amp[c_i] * kernel_single[y_i, x_i] * taper
     else:
         # If there is only a single set of amplitudes it is more efficient to multiply by amp in 1D
-        model_img = np.sum((np.outer(amp * next(kernel_y_gen), next(kernel_x_gen)) for amp in amplitudes))
+
+        def kernel_1d(locs, size):
+            """pre-computes the 1D sinc function values along each axis."""
+            pix = np.arange(size, dtype=np.float64)
+            sign = np.power(-1.0, pix)
+            offset = np.floor(locs)
+
+            delta = locs - offset
+
+            kernel = np.zeros((len(locs), size), dtype=np.float64)
+
+            for i, loc in enumerate(locs):
+                if delta[i] == 0:
+                    kernel[i, :][offset[i]] = 1.0
+                else:
+                    kernel[i, :] = np.sin(-pi * loc) / (pi * (pix - loc)) * sign[i]
+            return kernel
+
+        kernel_x = kernel_1d(x_loc, x_size)
+        kernel_y = (amplitudes*kernel_1d(y_loc, y_size).T).T
+
+        model_img = np.einsum('ij,ik->jk', kernel_y, kernel_x)
 
     if not no_fft:
         if multi_catalog:
