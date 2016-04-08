@@ -16,6 +16,9 @@ Important note:
 """
 from __future__ import division
 import numpy as np
+import cPickle
+import unittest
+import lsst.utils.tests as utilsTests
 
 
 def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, kernel_radius=10, **kwargs):
@@ -181,3 +184,82 @@ def input_type_check(var):
     if type(var) != np.ndarray:
         var = np.array(var)
     return(var)
+
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+
+class SingleSourceTestCase(utilsTests.TestCase):
+    def setUp(self):
+        self.x_size = 64
+        self.y_size = 64
+        self.x_loc = [13.34473]  # Arbitrary
+        self.y_loc = [42.87311]  # Arbitrary
+        self.radius = 10
+        n_star = 1
+        n_band = 3
+        flux_arr = np.zeros((n_star, n_band))
+        flux_arr[0, :] = np.arange(n_band) / 10.0 + 1.0
+        self.amplitudes = flux_arr
+
+    def tearDown(self):
+        """Clean up."""
+        del self.x_size
+        del self.y_size
+        del self.x_loc
+        del self.y_loc
+        del self.radius
+        del self.amplitudes
+
+
+    def testSingleSource(self):
+        """Test """
+        data_file = "test_data/SingleSourceTest.pickle"
+        with open(data_file, 'rb') as dumpfile:
+            ref_image = cPickle.load(dumpfile)
+        amplitude = self.amplitudes[0, 0]
+        single_image = fast_dft(amplitude, self.x_loc, self.y_loc,
+                                x_size=self.x_size, y_size=self.y_size, kernel_radius=self.radius)
+        abs_diff_sum = np.sum(np.abs(single_image - ref_image))
+        self.assertAlmostEqual(abs_diff_sum, 0.0)
+
+
+    def testFaintSource(self):
+        data_file = "test_data/FaintSourceTest.pickle"
+        with open(data_file, 'rb') as dumpfile:
+            ref_image = cPickle.load(dumpfile)
+        faint_image = fast_dft(self.amplitudes, self.x_loc, self.y_loc,
+                               x_size=self.x_size, y_size=self.y_size, kernel_radius=self.radius)
+        abs_diff_sum = 0.0
+        for _i, image in enumerate(faint_image):
+            abs_diff_sum += np.sum(np.abs(image - ref_image[_i]))
+        self.assertAlmostEqual(abs_diff_sum, 0.0)
+
+
+    def testBrightSource(self):
+        data_file = "test_data/BrightSourceTest.pickle"
+        with open(data_file, 'rb') as dumpfile:
+            ref_image = cPickle.load(dumpfile)
+        bright_image = fast_dft(self.amplitudes, self.x_loc, self.y_loc,
+                                x_size=self.x_size, y_size=self.y_size, kernel_radius=self.x_size)
+        abs_diff_sum = 0.0
+        for _i, image in enumerate(bright_image):
+            abs_diff_sum += np.sum(np.abs(image - ref_image[_i]))
+        self.assertAlmostEqual(abs_diff_sum, 0.0)
+
+
+def suite():
+    """Return a suite containing all the test cases in this module."""
+    utilsTests.init()
+
+    suites = []
+    suites += unittest.makeSuite(SingleSourceTestCase)
+    suites += unittest.makeSuite(utilsTests.MemoryTestCase)
+    return unittest.TestSuite(suites)
+
+
+def run(shouldExit=False):
+    """Run the tests."""
+    utilsTests.run(suite(), shouldExit)
+
+if __name__ == "__main__":
+    run(True)
