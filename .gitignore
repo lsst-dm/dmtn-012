@@ -1,1 +1,5 @@
 _build/
+*.pyc
+*.pickle
+*.lprof
+_python/.ipynb_checkpoints/
