@@ -150,7 +150,7 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
         # If there is only a single set of amplitudes it is more efficient to multiply by amp in 1D
 
         def kernel_1d(locs, size):
-            """pre-computes the 1D sinc function values along each axis."""
+            """pre-compute the 1D sinc function values along each axis."""
             pix = np.arange(size, dtype=np.float64)
             sign = np.power(-1.0, pix)
             offset = np.floor(locs)
@@ -164,7 +164,7 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
             return kernel
 
         kernel_x = kernel_1d(x_loc, x_size)
-        kernel_y = (amplitudes*kernel_1d(y_loc, y_size).T).T
+        kernel_y = (amplitudes * kernel_1d(y_loc, y_size).T).T
 
         model_img = np.einsum('ij,ik->jk', kernel_y, kernel_x)
 
@@ -189,7 +189,10 @@ def input_type_check(var):
 
 
 class SingleSourceTestCase(utilsTests.TestCase):
+    """Unit test cases."""
+
     def setUp(self):
+        """Define parameters used by every test."""
         self.x_size = 64
         self.y_size = 64
         self.x_loc = [13.34473]  # Arbitrary
@@ -210,9 +213,8 @@ class SingleSourceTestCase(utilsTests.TestCase):
         del self.radius
         del self.amplitudes
 
-
-    def testSingleSource(self):
-        """Test """
+    def test_single_source(self):
+        """Test a single star with a single wavelength slice."""
         data_file = "test_data/SingleSourceTest.pickle"
         with open(data_file, 'rb') as dumpfile:
             ref_image = cPickle.load(dumpfile)
@@ -222,8 +224,8 @@ class SingleSourceTestCase(utilsTests.TestCase):
         abs_diff_sum = np.sum(np.abs(single_image - ref_image))
         self.assertAlmostEqual(abs_diff_sum, 0.0)
 
-
-    def testFaintSource(self):
+    def test_faint_source(self):
+        """Test a single faint star with multiple wavelength slices, using a reduced kernel."""
         data_file = "test_data/FaintSourceTest.pickle"
         with open(data_file, 'rb') as dumpfile:
             ref_image = cPickle.load(dumpfile)
@@ -234,8 +236,8 @@ class SingleSourceTestCase(utilsTests.TestCase):
             abs_diff_sum += np.sum(np.abs(image - ref_image[_i]))
         self.assertAlmostEqual(abs_diff_sum, 0.0)
 
-
-    def testBrightSource(self):
+    def test_bright_source(self):
+        """Test a single bright star with multiple wavelength slices, using all pixels."""
         data_file = "test_data/BrightSourceTest.pickle"
         with open(data_file, 'rb') as dumpfile:
             ref_image = cPickle.load(dumpfile)
