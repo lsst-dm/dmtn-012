@@ -20,7 +20,7 @@ import cPickle
 import unittest
 import lsst.utils.tests as utilsTests
 
-@profile
+
 def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, kernel_radius=10, **kwargs):
     """
     !Construct a gridded 2D Fourier transform of an array of amplitudes at floating-point locations.
@@ -302,7 +302,7 @@ class MultipleSourceTestCase(utilsTests.TestCase):
                                 x_size=self.x_size, y_size=self.y_size, kernel_radius=self.radius)
         abs_diff_sum = np.sum(np.abs(single_image - ref_image))
         self.assertAlmostEqual(abs_diff_sum, 0.0)
-    @profile
+
     def test_faint_source(self):
         """Test faint stars with multiple wavelength slices, using a reduced kernel."""
         data_file = "test_data/FaintSourceTestLarge.pickle"
@@ -314,7 +314,7 @@ class MultipleSourceTestCase(utilsTests.TestCase):
         for _i, image in enumerate(faint_image):
             abs_diff_sum += np.sum(np.abs(image - ref_image[_i]))
         self.assertAlmostEqual(abs_diff_sum, 0.0)
-    @profile
+
     def test_bright_source(self):
         """Test bright stars with multiple wavelength slices, using all pixels."""
         data_file = "test_data/BrightSourceTestLarge.pickle"
