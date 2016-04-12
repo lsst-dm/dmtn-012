@@ -60,9 +60,9 @@ Noise may optionally be injected at any step, to simulate photon shot noise of t
 
 Several example images are shown below, which were produced using the included iPython notebook (in _python/sim_fast example).
 Each image contains the same catalog of 10,000 stars, consisting of 5124 K, 3303 G, 1255 F, 274 A, and 44 B type stars (which can be obtained with the example notebook by setting seed = 5). 
-For this simulation I have generated two LSST u-band images: a 'reference' image at an airmass of 1.00 near zenith that used a single plane, and a 'science' image at an airmass of 1.06 that used 23 planes (a wavelength resolution of 3nm).
+For this simulation I have generated two LSST u-band images: a 'reference' image at an airmass of 1.00 near zenith that used a single plane, and a 'science' image at an airmass of 1.20 that used 23 planes (a wavelength resolution of 3nm).
 Each star in the simulation uses a simulated Kurucz SED from sims (https://github.com/lsst/sims_photUtils), and a Kolmogorov PSF from Galsim.
-The reference image shown in Figures 1 and 2 below took just over 3 minutes to generate on a single core of a 2015 Macbook, while the science image took roughly a minute longer despite having to simulate all 23 planes.
+The reference image shown in Figures 1 and 2 below took 37 seconds to generate on a single core of a 2015 Macbook, while the the science image took 131 seconds despite having to simulate all 23 planes.
 The science image is not visually different from the reference image on either color scale so only the difference image is displayed in Figure 3. 
 Note that the very hot and bright B type stars have a DCR dipole in the opposite direction of the cooler stars, which is precisely what a DCR algorithm must be designed to correct.
 
