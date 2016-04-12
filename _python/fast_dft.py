@@ -20,7 +20,7 @@ import cPickle
 import unittest
 import lsst.utils.tests as utilsTests
 
-
+@profile
 def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, kernel_radius=10, **kwargs):
     """
     !Construct a gridded 2D Fourier transform of an array of amplitudes at floating-point locations.
@@ -53,6 +53,20 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
     else:
         full_flag = False
 
+    def kernel_1d(locs, size):
+        """pre-compute the 1D sinc function values along each axis."""
+        pix = np.arange(size, dtype=np.float64)
+        sign = np.power(-1.0, pix)
+        offset = np.floor(locs)
+        delta = locs - offset
+        kernel = np.zeros((len(locs), size), dtype=np.float64)
+        for i, loc in enumerate(locs):
+            if delta[i] == 0:
+                kernel[i, :][offset[i]] = 1.0
+            else:
+                kernel[i, :] = np.sin(-pi * loc) / (pi * (pix - loc)) * sign
+        return kernel
+
     def kernel_1d_gen(locs, size):
         """A generalized generator function that pre-computes the 1D sinc function values along one axis."""
         pix = np.arange(size, dtype=np.float64)
@@ -71,6 +85,7 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
     kernel_y_gen = kernel_1d_gen(y_loc, y_size)
 
     if multi_catalog:
+
         def kernel_circle_inds(x_loc, y_loc, kernel_radius=None):
             """
             A generator function that pre-computes the pixels to use for gridding.
@@ -109,19 +124,22 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
                 yield y_i
                 yield taper
 
-        amp_arr = [amplitudes[_i, :] for _i in range(len(x_loc))]
-        model_img = [np.zeros((y_size, x_size)) for c_i in range(n_cat)]
-        x_pix = (int(np.round(xv)) for xv in x_loc)
-        y_pix = (int(np.round(yv)) for yv in y_loc)
-        kernel_ind_gen = kernel_circle_inds(x_loc, y_loc, kernel_radius=kernel_radius)
-        for amp in amp_arr:
-            kernel_x = next(kernel_x_gen)
-            kernel_y = next(kernel_y_gen)
-            kernel_single = np.outer(kernel_y, kernel_x)
-            if full_flag:
-                for c_i, model in enumerate(model_img):
-                    model += amp[c_i] * kernel_single
-            else:
+        if full_flag:
+            model_img = []
+            amp_arr = [amplitudes[:, _i] for _i in range(n_cat)]
+            kernel_x = kernel_1d(x_loc, x_size)
+            kernel_y = kernel_1d(y_loc, y_size)
+            for amp in amp_arr:
+                vals = np.einsum('i,ij->ij', amp, kernel_y)
+                model_img += [np.einsum('ij,ik->jk', vals, kernel_x)]
+        else:
+            amp_arr = [amplitudes[_i, :] for _i in range(len(x_loc))]
+            model_arr = np.zeros((y_size, x_size, n_cat))
+            model_arr_T = np.zeros((x_size, y_size, n_cat))
+            x_pix = (int(np.round(xv)) for xv in x_loc)
+            y_pix = (int(np.round(yv)) for yv in y_loc)
+            kernel_ind_gen = kernel_circle_inds(x_loc, y_loc, kernel_radius=kernel_radius)
+            for amp in amp_arr:
                 x_c = next(x_pix)
                 y_c = next(y_pix)
                 x0 = x_c - kernel_radius
@@ -136,32 +154,28 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
                 y1 = y_c + kernel_radius
                 if y1 > y_size:
                     y1 = y_size
+                kernel_x = next(kernel_x_gen)
+                kernel_y = next(kernel_y_gen)
+                kernel_x_slice = np.einsum('i,j->ij', kernel_x[x0:x1], kernel_y)
                 # central pixels will be added twice, so reduce their amplitude by half
-                kernel_single[y0:y1, x0:x1] = kernel_single[y0:y1, x0:x1] / 2.0
+                kernel_x_slice[:, y0:y1] /= 2.0
+                kernel_y_slice = np.einsum('i,j->ij', kernel_y[y0:y1], kernel_x)
+                kernel_y_slice[:, x0:x1] /= 2.0
                 x_i = next(kernel_ind_gen)
                 y_i = next(kernel_ind_gen)
                 taper = next(kernel_ind_gen)
-                for c_i, model in enumerate(model_img):
-                    model[y0:y1, :] += amp[c_i] * kernel_single[y0:y1, :]
-                    model[:, x0:x1] += amp[c_i] * kernel_single[:, x0:x1]
-                    if len(y_i) > 0:
-                        model[y_i, x_i] += amp[c_i] * kernel_single[y_i, x_i] * taper
+                if len(y_i) > 0:
+                    shell_vals = np.einsum('i,j->ij', kernel_x[x_i] * kernel_y[y_i] * taper, amp)
+                    model_arr[y_i, x_i, :] += shell_vals
+                vals = np.einsum('ij,k->ijk', kernel_y_slice, amp)
+                model_arr[y0:y1, :, :] += vals
+                vals = np.einsum('ij,k->ijk', kernel_x_slice, amp)
+                model_arr_T[x0:x1, :, :] += vals
+
+            model_arr += np.transpose(model_arr_T, (1, 0, 2))
+            model_img = [model_arr[:, :, c_i] for c_i in range(n_cat)]
     else:
         # If there is only a single set of amplitudes it is more efficient to multiply by amp in 1D
-
-        def kernel_1d(locs, size):
-            """pre-compute the 1D sinc function values along each axis."""
-            pix = np.arange(size, dtype=np.float64)
-            sign = np.power(-1.0, pix)
-            offset = np.floor(locs)
-            delta = locs - offset
-            kernel = np.zeros((len(locs), size), dtype=np.float64)
-            for i, loc in enumerate(locs):
-                if delta[i] == 0:
-                    kernel[i, :][offset[i]] = 1.0
-                else:
-                    kernel[i, :] = np.sin(-pi * loc) / (pi * (pix - loc)) * sign
-            return kernel
 
         kernel_x = kernel_1d(x_loc, x_size)
         kernel_y = (amplitudes * kernel_1d(y_loc, y_size).T).T
@@ -189,7 +203,7 @@ def input_type_check(var):
 
 
 class SingleSourceTestCase(utilsTests.TestCase):
-    """Unit test cases."""
+    """Lightweight unit test cases using a single star and a small image."""
 
     def setUp(self):
         """Define parameters used by every test."""
@@ -249,12 +263,78 @@ class SingleSourceTestCase(utilsTests.TestCase):
         self.assertAlmostEqual(abs_diff_sum, 0.0)
 
 
+class MultipleSourceTestCase(utilsTests.TestCase):
+    """Larger test case intended for profiling and accurate timing."""
+
+    def setUp(self):
+        """Define parameters used by every test."""
+        seed = 5
+        self.x_size = 512
+        self.y_size = 512
+        self.radius = 10
+        n_star = 100
+        n_band = 12
+        rand_gen = np.random
+        rand_gen.seed(seed)
+        self.x_loc = rand_gen.uniform(low=0, high=self.x_size, size=n_star)  # Arbitrary
+        self.y_loc = rand_gen.uniform(low=0, high=self.y_size, size=n_star)  # Arbitrary
+        flux_arr = np.zeros((n_star, n_band))
+        for _i in range(n_star):
+            flux_arr[_i, :] = np.abs(np.arange(n_band)**2.0 / 10.0 + rand_gen.normal(scale=10.0))
+        self.amplitudes = flux_arr
+
+    def tearDown(self):
+        """Clean up."""
+        del self.x_size
+        del self.y_size
+        del self.x_loc
+        del self.y_loc
+        del self.radius
+        del self.amplitudes
+
+    def test_continuum_source(self):
+        """Test stars with a single wavelength slice."""
+        data_file = "test_data/SingleSourceTestLarge.pickle"
+        with open(data_file, 'rb') as dumpfile:
+            ref_image = cPickle.load(dumpfile)
+        amplitude = self.amplitudes[:, 0]
+        single_image = fast_dft(amplitude, self.x_loc, self.y_loc,
+                                x_size=self.x_size, y_size=self.y_size, kernel_radius=self.radius)
+        abs_diff_sum = np.sum(np.abs(single_image - ref_image))
+        self.assertAlmostEqual(abs_diff_sum, 0.0)
+    @profile
+    def test_faint_source(self):
+        """Test faint stars with multiple wavelength slices, using a reduced kernel."""
+        data_file = "test_data/FaintSourceTestLarge.pickle"
+        with open(data_file, 'rb') as dumpfile:
+            ref_image = cPickle.load(dumpfile)
+        faint_image = fast_dft(self.amplitudes, self.x_loc, self.y_loc,
+                               x_size=self.x_size, y_size=self.y_size, kernel_radius=self.radius)
+        abs_diff_sum = 0.0
+        for _i, image in enumerate(faint_image):
+            abs_diff_sum += np.sum(np.abs(image - ref_image[_i]))
+        self.assertAlmostEqual(abs_diff_sum, 0.0)
+    @profile
+    def test_bright_source(self):
+        """Test bright stars with multiple wavelength slices, using all pixels."""
+        data_file = "test_data/BrightSourceTestLarge.pickle"
+        with open(data_file, 'rb') as dumpfile:
+            ref_image = cPickle.load(dumpfile)
+        bright_image = fast_dft(self.amplitudes, self.x_loc, self.y_loc,
+                                x_size=self.x_size, y_size=self.y_size, kernel_radius=self.x_size)
+        abs_diff_sum = 0.0
+        for _i, image in enumerate(bright_image):
+            abs_diff_sum += np.sum(np.abs(image - ref_image[_i]))
+        self.assertAlmostEqual(abs_diff_sum, 0.0)
+
+
 def suite():
     """Return a suite containing all the test cases in this module."""
     utilsTests.init()
 
     suites = []
-    suites += unittest.makeSuite(SingleSourceTestCase)
+    # suites += unittest.makeSuite(SingleSourceTestCase)
+    suites += unittest.makeSuite(MultipleSourceTestCase)
     suites += unittest.makeSuite(utilsTests.MemoryTestCase)
     return unittest.TestSuite(suites)
 
