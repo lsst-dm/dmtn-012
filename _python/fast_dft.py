@@ -95,6 +95,7 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
             """
             ind_radius = int(4 * kernel_radius)
             x_i0, y_i0 = np.meshgrid(np.arange(2.0 * ind_radius), np.arange(2.0 * ind_radius))
+            x_i0_int, y_i0_int = np.meshgrid(np.arange(2 * ind_radius), np.arange(2 * ind_radius))
             x_pix_arr = np.round(x_loc)
             y_pix_arr = np.round(y_loc)
             taper_filter = np.hanning(2 * ind_radius)
@@ -105,18 +106,21 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
                 dx = x_loc[src_i] - x_pix + ind_radius
                 dy = y_loc[src_i] - y_pix + ind_radius
 
-                test_image = np.sqrt((x_i0 - dx)**2.0 + (y_i0 - dy)**2.0)
-                test_image[ind_radius - kernel_radius: ind_radius + kernel_radius, :] = ind_radius
-                test_image[:, ind_radius - kernel_radius: ind_radius + kernel_radius] = ind_radius
+                dist = np.sqrt((x_i0 - dx)**2.0 + (y_i0 - dy)**2.0)
+                dist[ind_radius - kernel_radius: ind_radius + kernel_radius, :] = ind_radius
+                dist[:, ind_radius - kernel_radius: ind_radius + kernel_radius] = ind_radius
                 if x_pix < ind_radius:
-                    test_image[:, 0: ind_radius - x_pix] = ind_radius
+                    dist[:, 0: ind_radius - x_pix] = ind_radius
                 if x_pix > x_size - ind_radius:
-                    test_image[:, x_size - ind_radius - x_pix:] = ind_radius
+                    dist[:, x_size - ind_radius - x_pix:] = ind_radius
                 if y_pix < ind_radius:
-                    test_image[0: ind_radius - y_pix, :] = ind_radius
+                    dist[0: ind_radius - y_pix, :] = ind_radius
                 if y_pix > y_size - ind_radius:
-                    test_image[y_size - ind_radius - y_pix:, :] = ind_radius
-                y_i, x_i = np.where(test_image < ind_radius)
+                    dist[y_size - ind_radius - y_pix:, :] = ind_radius
+                dist_test = dist < ind_radius
+                x_i = x_i0_int[dist_test]
+                y_i = y_i0_int[dist_test]
+                # y_i, x_i = np.where(test_image < ind_radius)
                 taper = taper_filter[y_i] * taper_filter[x_i]
                 x_i += x_pix - ind_radius
                 y_i += y_pix - ind_radius
@@ -130,8 +134,8 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
             kernel_x = kernel_1d(x_loc, x_size)
             kernel_y = kernel_1d(y_loc, y_size)
             for amp in amp_arr:
-                vals = np.einsum('i,ij->ij', amp, kernel_y)
-                model_img += [np.einsum('ij,ik->jk', vals, kernel_x)]
+                amp_vals = np.einsum('i,ij->ij', amp, kernel_y)
+                model_img += [np.einsum('ij,ik->jk', amp_vals, kernel_x)]
         else:
             amp_arr = [amplitudes[_i, :] for _i in range(len(x_loc))]
             model_arr = np.zeros((y_size, x_size, n_cat))
@@ -157,20 +161,20 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
                 kernel_x = next(kernel_x_gen)
                 kernel_y = next(kernel_y_gen)
                 kernel_x_slice = np.einsum('i,j->ij', kernel_x[x0:x1], kernel_y)
-                # central pixels will be added twice, so reduce their amplitude by half
-                kernel_x_slice[:, y0:y1] /= 2.0
+                # central pixels will be added in both slices, so set to zero in one of them
+                kernel_x_slice[:, y0:y1] = 0
                 kernel_y_slice = np.einsum('i,j->ij', kernel_y[y0:y1], kernel_x)
-                kernel_y_slice[:, x0:x1] /= 2.0
+                # kernel_y_slice[:, x0:x1] /= 2.0
                 x_i = next(kernel_ind_gen)
                 y_i = next(kernel_ind_gen)
                 taper = next(kernel_ind_gen)
                 if len(y_i) > 0:
                     shell_vals = np.einsum('i,j->ij', kernel_x[x_i] * kernel_y[y_i] * taper, amp)
                     model_arr[y_i, x_i, :] += shell_vals
-                vals = np.einsum('ij,k->ijk', kernel_y_slice, amp)
-                model_arr[y0:y1, :, :] += vals
-                vals = np.einsum('ij,k->ijk', kernel_x_slice, amp)
-                model_arr_T[x0:x1, :, :] += vals
+                y_vals = np.einsum('ij,k->ijk', kernel_y_slice, amp)
+                model_arr[y0:y1, :, :] += y_vals
+                x_vals = np.einsum('ij,k->ijk', kernel_x_slice, amp)
+                model_arr_T[x0:x1, :, :] += x_vals
 
             model_arr += np.transpose(model_arr_T, (1, 0, 2))
             model_img = [model_arr[:, :, c_i] for c_i in range(n_cat)]
@@ -333,8 +337,8 @@ def suite():
     utilsTests.init()
 
     suites = []
-    # suites += unittest.makeSuite(SingleSourceTestCase)
-    suites += unittest.makeSuite(MultipleSourceTestCase)
+    suites += unittest.makeSuite(SingleSourceTestCase)
+    # suites += unittest.makeSuite(MultipleSourceTestCase)
     suites += unittest.makeSuite(utilsTests.MemoryTestCase)
     return unittest.TestSuite(suites)
 
