@@ -7,7 +7,6 @@ import lsst.afw.geom as afwGeom
 import lsst.afw.table as afwTable
 from lsst.sims.photUtils import Bandpass, matchStar  # , Sed, PhotometricParameters
 from lsst.utils import getPackageDir
-# import galsim
 # from lsst.sims.photUtils import matchStar
 # import lsst.afw.image as afwImage
 from calc_refractive_index import diff_refraction
@@ -16,244 +15,308 @@ import time
 photons_per_adu = 1e4  # used only to approximate the effect of photon shot noise, if photon_noise=True
 
 
-def star_sim(catalog=None, name=None, psf=None, pixel_scale=None, pad_image=1.5, x_size=None, y_size=None,
-             sky_noise=0.0, instrument_noise=0.0, photon_noise=False,
-             dcr_flag=False, band_name='g', sed_list=None,
-             astrometric_error=None, edge_dist=None, **kwargs):
-    """!Wrapper that takes a catalog of stars and simulates an image in units of Janskys."""
-    """
-    if psf is None:
-        psf = galsim.Kolmogorov(fwhm=1)
-    """
-    # I think most PSF classes have a getFWHM method. The math converts to a sigma for a gaussian.
-    fwhm_to_sigma = 1.0 / (2.0 * np.sqrt(2. * np.log(2)))
-    if pixel_scale is None:
-        pixel_scale = psf.getFWHM() * fwhm_to_sigma
-    if edge_dist is None:
-        if pad_image > 1:
-            edge_dist = 0
+class StarSim:
+    """Class that defines a random simulated region of sky, and allows fast transformations."""
+
+    def __init__(self, psf=None, pixel_scale=0.25, pad_image=1.5, catalog=None,
+                 x_size=512, y_size=512, sky_noise=0.0, instrument_noise=0.0, photon_noise=False,
+                 band_name='g', sed_list=None,
+                 astrometric_error=None, edge_dist=None, **kwargs):
+        """Set up the fixed parameters of the simulation."""
+        # if psf is None:
+        #     import galsim
+        #     self.psf = galsim.Kolmogorov(fwhm=1)
+        # else:
+        #     self.psf = psf
+        # I think most PSF classes have a getFWHM method. The math converts to a sigma for a gaussian.
+        fwhm_to_sigma = 1.0 / (2.0 * np.sqrt(2. * np.log(2)))
+        if pixel_scale is None:
+            pixel_scale = psf.getFWHM() * fwhm_to_sigma
+        if edge_dist is None:
+            if pad_image > 1:
+                edge_dist = 0
+            else:
+                edge_dist = 5 * psf.getFWHM() * fwhm_to_sigma / pixel_scale
+        # self.pixel_scale = pixel_scale
+        # self.x_size = x_size
+        # self.y_size = y_size
+        # self.pad_image = pad_image
+        self.psf = psf
+        self.edge_dist = edge_dist
+        self.kernel_radius = np.ceil(5 * psf.getFWHM() * fwhm_to_sigma / pixel_scale)
+
+        bandpass = _load_bandpass(band_name=band_name, **kwargs)
+        self.n_step = int(np.ceil((bandpass.wavelen_max - bandpass.wavelen_min) / bandpass.wavelen_step))
+        self.bandpass = bandpass
+        if sed_list is None:
+            # Load in model SEDs
+            matchStarObj = matchStar()
+            sed_list = matchStarObj.loadKuruczSEDs()
+        self.sed_list = sed_list
+        self.catalog = catalog
+        self.coord = self._CoordsXY(pixel_scale=pixel_scale, pad_image=pad_image,
+                                    x_size=x_size, y_size=y_size)
+        self.source_model = None
+        self.bright_model = None
+        self.n_star = None
+
+    def load_catalog(self, name=None, sed_list=None, n_star=None, **kwargs):
+        """Load or generate a catalog of stars to be used for the simulations."""
+        bright_sigma_threshold = 3.0
+        bright_flux_threshold = 0.1
+        CoordsXY = self.coord
+        # print("Kernel radius used: ", kernel_radius)
+        if self.catalog is None:
+            self.catalog = _cat_sim(x_size=CoordsXY.xsize(base=True), y_size=CoordsXY.ysize(base=True),
+                                    name=name, n_star=n_star, pixel_scale=CoordsXY.pixel_scale,
+                                    edge_distance=self.edge_dist, **kwargs)
+        schema = self.catalog.getSchema()
+        n_star = len(self.catalog)
+        self.n_star = n_star
+        if sed_list is None:
+            sed_list = self.sed_list
+
+        if name is None:
+            # If no name is supplied, find the first entry in the schema in the format *_flux
+            schema_entry = schema.extract("*_flux", ordered='true')
+            fluxName = schema_entry.iterkeys().next()
         else:
-            edge_dist = 5 * psf.getFWHM() * fwhm_to_sigma / pixel_scale
-    kernel_radius = np.ceil(5 * psf.getFWHM() * fwhm_to_sigma / pixel_scale)
-    bright_sigma_threshold = 3.0
-    bright_flux_threshold = 0.1
-    # print("Kernel radius used: ", kernel_radius)
-    if catalog is None:
-        catalog = cat_sim(x_size=x_size, y_size=y_size, name=name, edge_distance=edge_dist,
-                          pixel_scale=pixel_scale, **kwargs)
-    schema = catalog.getSchema()
-    n_star = len(catalog)
-    bandpass = load_bandpass(band_name=band_name, **kwargs)
-    if name is None:
-        # If no name is supplied, find the first entry in the schema in the format *_flux
-        schema_entry = schema.extract("*_flux", ordered='true')
-        fluxName = schema_entry.iterkeys().next()
-    else:
-        fluxName = name + '_flux'
+            fluxName = name + '_flux'
 
-    if sed_list is None:
-        # Load in model SEDs
-        matchStarObj = matchStar()
-        sed_list = matchStarObj.loadKuruczSEDs()
+        fluxKey = schema.find(fluxName).key
+        temperatureKey = schema.find("temperature").key
+        metalKey = schema.find("metallicity").key
+        gravityKey = schema.find("gravity").key
+        # if catalog.isContiguous()
+        flux = self.catalog[fluxKey] / self.psf.getFlux()
+        temperatures = self.catalog[temperatureKey]
+        metallicities = self.catalog[metalKey]
+        gravities = self.catalog[gravityKey]
+        xv = self.catalog.getX()
+        yv = self.catalog.getY()
+        flux_arr = np.zeros((self.n_star, self.n_step))
 
-    fluxKey = schema.find(fluxName).key
-    temperatureKey = schema.find("temperature").key
-    metalKey = schema.find("metallicity").key
-    gravityKey = schema.find("gravity").key
-    # if catalog.isContiguous()
-    flux = catalog[fluxKey] / psf.getFlux()
-    temperatures = catalog[temperatureKey]
-    metallicities = catalog[metalKey]
-    gravities = catalog[gravityKey]
-    flux_arr = np.zeros((n_star, bandpass_nstep(bandpass)))
+        for _i in range(n_star):
+            f_star = flux[_i]
+            t_star = temperatures[_i]
+            z_star = metallicities[_i]
+            g_star = gravities[_i]
+            star_spectrum = _star_gen(sed_list=sed_list, temperature=t_star, flux=f_star,
+                                      bandpass=self.bandpass, metallicity=z_star, surface_gravity=g_star)
+            flux_arr[_i, :] = np.array([flux_val for flux_val in star_spectrum])
+        flux_tot = np.sum(flux_arr, axis=1)
+        if n_star > 3:
+            cat_sigma = np.std(flux_tot[flux_tot - np.median(flux_tot)
+                                        < bright_sigma_threshold * np.std(flux_tot)])
+            bright_inds = (np.where(flux_tot - np.median(flux_tot) > bright_sigma_threshold * cat_sigma))[0]
+            if len(bright_inds) > 0:
+                flux_faint = np.sum(flux_arr) - np.sum(flux_tot[bright_inds])
+                bright_inds = [i_b for i_b in bright_inds
+                               if flux_tot[i_b] > bright_flux_threshold * flux_faint]
+            bright_flag = np.zeros(n_star)
+            bright_flag[bright_inds] = 1
+            # n_bright = len(i_bright)
+            # i_faint = [_i for _i in range(n_star) if _i not in i_bright]
+            # n_faint = len(i_faint)
+        else:
+            bright_flag = np.ones(n_star)
+            # i_faint = np.arange(0)
+            # n_bright = n_star
+            # n_faint = 0
+        # if not dcr_flag:
+        #     flux_arr = flux_tot
+        #     flux_bright = flux_arr[i_bright]
+        #     flux_arr = flux_arr[i_faint]
+        # else:
+        #     flux_bright = flux_arr[i_bright, :]
+        #     flux_arr = flux_arr[i_faint, :]
 
-    for _i in range(n_star):
-        f_star = flux[_i]
-        t_star = temperatures[_i]
-        z_star = metallicities[_i]
-        g_star = gravities[_i]
-        star_spectrum = star_gen(sed_list=sed_list, temperature=t_star, flux=f_star, bandpass=bandpass,
-                                 metallicity=z_star, surface_gravity=g_star)
-        flux_arr[_i, :] = np.array([flux_val for flux_val in star_spectrum])
-    flux_tot = np.sum(flux_arr, axis=1)
-    if n_star > 3:
-        cat_sigma = np.std(flux_tot[flux_tot - np.median(flux_tot)
-                                    < bright_sigma_threshold * np.std(flux_tot)])
-        i_bright = (np.where(flux_tot - np.median(flux_tot) > bright_sigma_threshold * cat_sigma))[0]
-        if len(i_bright) > 0:
-            flux_faint = np.sum(flux_arr) - np.sum(flux_tot[i_bright])
-            i_bright = [i_b for i_b in i_bright if flux_tot[i_b] > bright_flux_threshold * flux_faint]
-        n_bright = len(i_bright)
-        i_faint = [_i for _i in range(n_star) if _i not in i_bright]
-        n_faint = len(i_faint)
-    else:
-        i_bright = np.arange(n_star)
-        i_faint = np.arange(0)
-        n_bright = n_star
-        n_faint = 0
-    if not dcr_flag:
-        flux_arr = flux_tot
-        flux_bright = flux_arr[i_bright]
-        flux_arr = flux_arr[i_faint]
-    else:
-        flux_bright = flux_arr[i_bright, :]
-        flux_arr = flux_arr[i_faint, :]
+        self.n_star = n_star
+        self.star_flux = flux_arr
+        CoordsXY.set_flag(bright_flag == 1)
+        CoordsXY.set_x(xv)
+        CoordsXY.set_y(yv)
 
-    xv = catalog.getX()
-    yv = catalog.getY()
-
-    return_image = np.zeros((y_size, x_size))
-    if dcr_flag:
+    def simulate(self, verbose=True, **kwargs):
+        """Call fast_dft.py to construct the input sky model for each frequency slice prior to convolution."""
+        CoordsXY = self.coord
+        n_bright = CoordsXY.n_flag()
+        n_faint = self.n_star - n_bright
+        bright_flag = True
         if n_faint > 0:
-            return_image += convolve_dcr_image(flux_arr, xv[i_faint], yv[i_faint],
-                                               bandpass=bandpass, x_size=x_size, y_size=y_size,
-                                               kernel_radius=kernel_radius,
-                                               psf=psf, pad_image=pad_image, pixel_scale=pixel_scale,
-                                               photon_noise=photon_noise, sky_noise=sky_noise, **kwargs)
+            CoordsXY.set_oversample(1)
+            flux = self.star_flux[CoordsXY.flag != bright_flag]
+            timing_model = -time.time()
+            self.source_model = fast_dft(flux, CoordsXY.x_loc(bright=False), CoordsXY.y_loc(bright=False),
+                                         x_size=CoordsXY.xsize(), y_size=CoordsXY.ysize(),
+                                         kernel_radius=self.kernel_radius, no_fft=False, **kwargs)
+            timing_model += time.time()
+            if verbose:
+                print(_timing_report(n_star=n_faint, bright=False, timing=timing_model))
         if n_bright > 0:
-            return_image += convolve_dcr_image(flux_bright, xv[i_bright], yv[i_bright],
-                                               bandpass=bandpass, x_size=x_size, y_size=y_size,
-                                               kernel_radius=x_size, oversample_image=2.0,
-                                               psf=psf, pad_image=pad_image, pixel_scale=pixel_scale,
-                                               photon_noise=photon_noise, sky_noise=0.0, **kwargs)
+            CoordsXY.set_oversample(2)
+            flux = self.star_flux[CoordsXY.flag == bright_flag]
+            timing_model = -time.time()
+            self.bright_model = fast_dft(flux, CoordsXY.x_loc(bright=True), CoordsXY.y_loc(bright=True),
+                                         x_size=CoordsXY.xsize(), y_size=CoordsXY.ysize(),
+                                         kernel_radius=CoordsXY.xsize(), no_fft=False, **kwargs)
+            timing_model += time.time()
+            if verbose:
+                print(_timing_report(n_star=n_bright, bright=True, timing=timing_model))
 
-    else:
-        if n_faint > 0:
-            return_image += convolve_image(flux_arr, xv[i_faint], yv[i_faint],
-                                           x_size=x_size, y_size=y_size, kernel_radius=kernel_radius,
-                                           psf=psf, pad_image=pad_image, pixel_scale=pixel_scale,
-                                           photon_noise=photon_noise, sky_noise=sky_noise, **kwargs)
-        if n_bright > 0:
-            return_image += convolve_image(flux_bright, xv[i_bright], yv[i_bright],
-                                           x_size=x_size, y_size=y_size,
-                                           kernel_radius=x_size, oversample_image=2.0,
-                                           psf=psf, pad_image=pad_image, pixel_scale=pixel_scale,
-                                           photon_noise=photon_noise, sky_noise=0.0, **kwargs)
-    if instrument_noise > 0:
-        return_image += np.random.normal(scale=instrument_noise, size=(y_size, x_size))
-    return(return_image)
+    def convolve(self, seed=None, sky_noise=0, verbose=True, **kwargs):
+        """Convolve a simulated sky with a given PSF."""
+        sky_noise_gen = self._sky_noise_gen(seed=seed, amplitude=sky_noise)
+        if self.source_model is not None:
+            source_image = self._convolve_subroutine(sky_noise_gen, verbose=verbose, bright=False, **kwargs)
+        else:
+            source_image = 0.0
+        if self.bright_model is not None:
+            bright_image = self._convolve_subroutine(sky_noise_gen, verbose=verbose, bright=True, **kwargs)
+        else:
+            bright_image = 0.0
+        return_image = source_image + bright_image
+        return(return_image)
+
+    def _convolve_subroutine(self, sky_noise_gen, psf=None, verbose=True, bright=False, **kwargs):
+        CoordsXY = self.coord
+        if bright:
+            CoordsXY.set_oversample(2)
+        else:
+            CoordsXY.set_oversample(1)
+        dcr_gen = _dcr_generator(self.bandpass, pixel_scale=CoordsXY.scale(), **kwargs)
+        # The images are purely real, so we can save time by using the real FFT,
+        # which uses only half of the complex plane
+        convol = np.zeros((CoordsXY.ysize(), CoordsXY.xsize() // 2 + 1), dtype='complex64')
+        if psf is None:
+            psf = self.psf
+        timing_fft = -time.time()
+
+        for _i, offset in enumerate(dcr_gen):
+            if bright:
+                source_model_use = self.bright_model[_i]
+            else:
+                source_model_use = self.source_model[_i]
+
+            psf_image = psf.drawImage(scale=CoordsXY.scale(), method='fft', offset=offset,
+                                      nx=CoordsXY.xsize(), ny=CoordsXY.ysize(), use_true_center=False)
+            # if photon_noise:
+            #     base_noise = np.random.normal(scale=1.0, size=(y_size_use, x_size_use))
+            #     base_noise *= np.sqrt(np.abs(source_image_use) / photons_per_adu)
+            #     source_image_use += base_noise
+            try:
+                source_model_use += next(sky_noise_gen)
+            except StopIteration:
+                pass
+            convol_single = source_model_use * rfft2(psf_image.array)
+            convol += convol_single
+        return_image = np.real(fftshift(irfft2(convol))) * CoordsXY.oversample**2.0
+        timing_fft += time.time()
+        if verbose:
+            print("FFT timing for %i DCR planes: [%0.3fs | %0.3fs per plane]"
+                  % (_i, timing_fft, timing_fft / _i))
+        return_image = return_image[CoordsXY.ymin():CoordsXY.ymax():CoordsXY.oversample,
+                                    CoordsXY.xmin():CoordsXY.xmax():CoordsXY.oversample]
+        if bright:
+            CoordsXY.set_oversample(1)
+        return(return_image)
+
+    def _sky_noise_gen(self, seed=None, amplitude=None):
+        """Generate random sky noise in Fourier space."""
+        if amplitude > 0:
+            rand_gen = np.random
+            if seed is not None:
+                rand_gen.seed(seed - 1)
+            CoordsXY = self.coord
+            y_size_use = CoordsXY.ysize()
+            x_size_use = CoordsXY.xsize() // 2 + 1
+            amplitude_use = amplitude / (np.sqrt(2.0 * self.n_step * x_size_use * y_size_use))
+            for _i in range(self.n_step):
+                rand_fft = (rand_gen.normal(scale=amplitude_use, size=(y_size_use, x_size_use))
+                            + 1j * rand_gen.normal(scale=amplitude_use, size=(y_size_use, x_size_use)))
+                yield(rand_fft)
+
+    class _CoordsXY:
+        def __init__(self, pad_image=1.5, pixel_scale=None, x_size=None, y_size=None):
+            self._x_size = x_size
+            self._y_size = y_size
+            self.pixel_scale = pixel_scale
+            self.oversample = 1
+            self.pad = pad_image
+            self.flag = None
+
+        def set_x(self, x_loc):
+            self._x = x_loc
+
+        def set_y(self, y_loc):
+            self._y = y_loc
+
+        def set_flag(self, flag):
+            self.flag = flag.astype(bool)
+
+        def n_flag(self):
+            if self.flag is None:
+                n = 0
+            else:
+                n = np.sum(self.flag)
+            return(n)
+
+        def set_oversample(self, oversample):
+            self.oversample = int(oversample)
+
+        def xsize(self, base=False):
+            if base:
+                return(self._x_size)
+            else:
+                return(int(self._x_size * self.pad) * self.oversample)
+
+        def xmin(self):
+            return(self.oversample * (self._x_size * (self.pad - 1) // 2))
+
+        def xmax(self):
+            return(self.xmin() + self._x_size * self.oversample)
+
+        def ysize(self, base=False):
+            if base:
+                return(self._y_size)
+            else:
+                return(int(self._y_size * self.pad) * self.oversample)
+
+        def ymin(self):
+            return(self.oversample * (self._y_size * (self.pad - 1) // 2))
+
+        def ymax(self):
+            return(self.ymin() + self._y_size * self.oversample)
+
+        def scale(self):
+            return(self.pixel_scale / self.oversample)
+
+        def x_loc(self, bright=False):
+            x_loc = self._x * self.oversample + self.xmin()
+            if self.flag is not None:
+                x_loc = x_loc[self.flag == bright]
+            return(x_loc)
+
+        def y_loc(self, bright=False):
+            y_loc = self._y * self.oversample + self.ymin()
+            if self.flag is not None:
+                y_loc = y_loc[self.flag == bright]
+            return(y_loc)
 
 
-def convolve_dcr_image(flux_arr, x_loc, y_loc, bandpass=None, x_size=None, y_size=None, seed=None,
-                       psf=None, pad_image=1.5, pixel_scale=None, kernel_radius=None,
-                       oversample_image=1, photon_noise=False, sky_noise=0.0, verbose=True, **kwargs):
-    """Wrapper to call fast_dft with multiple DCR planes."""
-    x_size_use = int(x_size * pad_image)
-    y_size_use = int(y_size * pad_image)
-    oversample_image = int(oversample_image)
-    pixel_scale_use = pixel_scale / oversample_image
-    x0 = oversample_image * ((x_size_use - x_size) // 2)
-    x1 = x0 + x_size * oversample_image
-    y0 = oversample_image * ((y_size_use - y_size) // 2)
-    y1 = y0 + y_size * oversample_image
-    x_loc_use = x_loc * oversample_image + x0
-    y_loc_use = y_loc * oversample_image + y0
-    x_size_use *= oversample_image
-    y_size_use *= oversample_image
-    timing_model = -time.time()
-    source_image = fast_dft(flux_arr, x_loc_use, y_loc_use, x_size=x_size_use, y_size=y_size_use,
-                            kernel_radius=kernel_radius, **kwargs)
-    timing_model += time.time()
-    n_star = len(x_loc)
-    if oversample_image > 1:
+def _timing_report(n_star=None, bright=False, timing=None):
+    if bright:
         bright_star = "bright "
     else:
         bright_star = ""
-    if verbose:
-        if n_star == 1:
-            print("Time to model %i %sstar: [%0.3fs]"
-                  % (n_star, bright_star, timing_model))
-        else:
-            print("Time to model %i %sstars: [%0.3fs | %0.5fs per star]"
-                  % (n_star, bright_star, timing_model, timing_model / n_star))
-    rand_gen = np.random
-    if seed is not None:
-        rand_gen.seed(seed - 1)
-    # The images are purely real, so we can save time by using the real FFT,
-    # which uses only half of the complex plane
-    convol = np.zeros((y_size_use, x_size_use // 2 + 1), dtype='complex64')
-    dcr_gen = dcr_generator(bandpass, pixel_scale=pixel_scale_use, **kwargs)
-    timing_fft = -time.time()
-
-    for _i, offset in enumerate(dcr_gen):
-        source_image_use = source_image[_i]
-
-        psf_image = psf.drawImage(scale=pixel_scale_use, method='fft', offset=offset,
-                                  nx=x_size_use, ny=y_size_use, use_true_center=False)
-        if photon_noise:
-            base_noise = np.random.normal(scale=1.0, size=(y_size_use, x_size_use))
-            base_noise *= np.sqrt(np.abs(source_image_use) / photons_per_adu)
-            source_image_use += base_noise
-        if sky_noise > 0:
-            source_image_use += (rand_gen.normal(scale=sky_noise, size=(y_size_use, x_size_use))
-                                 / np.sqrt(bandpass_nstep(bandpass)))
-        convol += rfft2(source_image_use) * rfft2(psf_image.array)
-    return_image = np.real(fftshift(irfft2(convol)))
-    timing_fft += time.time()
-    if verbose:
-        print("FFT timing for %i DCR planes: [%0.3fs | %0.3fs per plane]"
-              % (_i, timing_fft, timing_fft / _i))
-    return(return_image[y0:y1:oversample_image, x0:x1:oversample_image] * oversample_image**2)
-
-
-def convolve_image(flux_arr, x_loc, y_loc, x_size=None, y_size=None, seed=None,
-                   psf=None, pad_image=1.5, pixel_scale=None, kernel_radius=None,
-                   oversample_image=1, photon_noise=False, sky_noise=0.0, verbose=True, **kwargs):
-    """Wrapper to call fast_dft with no DCR planes."""
-    x_size_use = int(x_size * pad_image)
-    y_size_use = int(y_size * pad_image)
-    oversample_image = int(oversample_image)
-    pixel_scale_use = pixel_scale / oversample_image
-    x0 = oversample_image * ((x_size_use - x_size) // 2)
-    x1 = x0 + x_size * oversample_image
-    y0 = oversample_image * ((y_size_use - y_size) // 2)
-    y1 = y0 + y_size * oversample_image
-    x_loc_use = x_loc * oversample_image + x0
-    y_loc_use = y_loc * oversample_image + y0
-    x_size_use *= oversample_image
-    y_size_use *= oversample_image
-    timing_model = -time.time()
-    source_image = fast_dft(flux_arr, x_loc_use, y_loc_use, x_size=x_size_use, y_size=y_size_use,
-                            kernel_radius=kernel_radius, **kwargs)
-    timing_model += time.time()
-    n_star = len(x_loc)
-    if oversample_image > 1:
-        bright_star = "bright "
+    if n_star == 1:
+        return("Time to model %i %sstar: [%0.3fs]" % (n_star, bright_star, timing))
     else:
-        bright_star = ""
-    if verbose:
-        if n_star == 1:
-            print("Time to model %i %sstar: [%0.3fs]" % (n_star, bright_star, timing_model))
-        else:
-            print("Time to model %i %sstars: [%0.3fs | %0.5fs per star]"
-                  % (n_star, bright_star, timing_model, timing_model / n_star))
-
-    rand_gen = np.random
-    if seed is not None:
-        rand_gen.seed(seed - 1)
-    psf_image = psf.drawImage(scale=pixel_scale_use, method='fft', offset=[0, 0],
-                              nx=x_size_use, ny=y_size_use, use_true_center=False)
-    if photon_noise:
-        base_noise = np.random.normal(scale=1.0, size=(y_size_use, x_size_use))
-        base_noise *= np.sqrt(np.abs(source_image) / photons_per_adu)
-        source_image += base_noise
-    if sky_noise > 0:
-        source_image += rand_gen.normal(scale=sky_noise, size=(y_size_use, x_size_use))
-    timing_fft = -time.time()
-    convol = rfft2(source_image) * rfft2(psf_image.array)
-    return_image = np.real(fftshift(irfft2(convol)))
-    timing_fft += time.time()
-    if verbose:
-        print("FFT timing (single plane): [%0.3fs]" % (timing_fft))
-    return(return_image[y0:y1:oversample_image, x0:x1:oversample_image] * oversample_image**2)
+        return("Time to model %i %sstars: [%0.3fs | %0.5fs per star]"
+               % (n_star, bright_star, timing, timing / n_star))
 
 
-def bandpass_nstep(bandpass):
-    """Simple function to pre-compute the number of bins to use for a given bandpass."""
-    return(int(np.ceil((bandpass.wavelen_max - bandpass.wavelen_min) / bandpass.wavelen_step)))
-
-
-def dcr_generator(bandpass, pixel_scale=None, elevation=None, azimuth=None, **kwargs):
+def _dcr_generator(bandpass, pixel_scale=None, elevation=None, azimuth=None, **kwargs):
     """!Call the functions that compute Differential Chromatic Refraction (relative to mid-band)."""
     if elevation is None:
         elevation = 50.0
@@ -261,7 +324,7 @@ def dcr_generator(bandpass, pixel_scale=None, elevation=None, azimuth=None, **kw
         azimuth = 0.0
     zenith_angle = 90.0 - elevation
     wavelength_midpoint = bandpass.calc_eff_wavelen()
-    for wavelength in wavelength_iterator(bandpass, use_midpoint=True):
+    for wavelength in _wavelength_iterator(bandpass, use_midpoint=True):
         # Note that refract_amp can be negative, since it's relative to the midpoint of the band
         refract_amp = diff_refraction(wavelength=wavelength, wavelength_ref=wavelength_midpoint,
                                       zenith_angle=zenith_angle, **kwargs)
@@ -271,8 +334,8 @@ def dcr_generator(bandpass, pixel_scale=None, elevation=None, azimuth=None, **kw
         yield((dx, dy))
 
 
-def cat_sim(x_size=None, y_size=None, seed=None, n_star=None, n_galaxy=None,
-            edge_distance=10, name=None, pixel_scale=None, **kwargs):
+def _cat_sim(x_size=None, y_size=None, seed=None, n_star=None, n_galaxy=None,
+             edge_distance=0, name=None, pixel_scale=None, **kwargs):
     """Wrapper function that generates a semi-realistic catalog of stars."""
     schema = afwTable.SourceTable.makeMinimalSchema()
     if name is None:
@@ -295,23 +358,14 @@ def cat_sim(x_size=None, y_size=None, seed=None, n_star=None, n_galaxy=None,
 
     x_size_gen = x_size - 2 * edge_distance
     y_size_gen = y_size - 2 * edge_distance
-    star_properties = stellar_distribution(seed=seed, n_star=n_star, pixel_scale=pixel_scale,
-                                           x_size=x_size_gen, y_size=y_size_gen, **kwargs)
+    star_properties = _stellar_distribution(seed=seed, n_star=n_star, pixel_scale=pixel_scale,
+                                            x_size=x_size_gen, y_size=y_size_gen, **kwargs)
     temperature = star_properties[0]
     flux = star_properties[1]
     metallicity = star_properties[2]
     surface_gravity = star_properties[3]
     x = star_properties[4]
     y = star_properties[5]
-    """
-    x0 = 0
-    y0 = 0
-    rand_gen = np.random
-    if seed is not None:
-        rand_gen.seed(seed + 1)  # ensure that we use a different seed than stellar_distribution.
-    x = rand_gen.uniform(x0 + edge_distance, x0 + x_size - edge_distance, n_star)
-    y = rand_gen.uniform(y0 + edge_distance, y0 + y_size - edge_distance, n_star)
-    """
 
     catalog = afwTable.SourceCatalog(schema)
     fluxKey = schema.find(fluxName).key
@@ -334,9 +388,9 @@ def cat_sim(x_size=None, y_size=None, seed=None, n_star=None, n_galaxy=None,
     return(catalog.copy(True))  # Return a copy to make sure it is contiguous in memory.
 
 
-def star_gen(sed_list=None, seed=None, temperature=5600, metallicity=0.0, surface_gravity=1.0,
-             flux=1.0, bandpass=None):
-    """!Generate a randomized spectrum at a given temperature over a range of wavelengths."""
+def _star_gen(sed_list=None, seed=None, temperature=5600, metallicity=0.0, surface_gravity=1.0,
+              flux=1.0, bandpass=None):
+    """Generate a randomized spectrum at a given temperature over a range of wavelengths."""
     """
         Either use a supplied list of SEDs to be drawn from, or use a blackbody radiation model.
         The output is normalized to sum to the given flux.
@@ -394,11 +448,12 @@ def star_gen(sed_list=None, seed=None, temperature=5600, metallicity=0.0, surfac
 
         # integral over the full bandpass, to convert back to astrophysical quantities
         sed_band_integral = 0.0
-        for wave_start, wave_end in wavelength_iterator(bandpass):
-            sed_band_integral += next(bandpass_gen2) * sed_integrate(wave_start=wave_start, wave_end=wave_end)
+        for wave_start, wave_end in _wavelength_iterator(bandpass):
+            sed_band_integral += (next(bandpass_gen2)
+                                  * sed_integrate(wave_start=wave_start, wave_end=wave_end))
         flux_band_norm = flux_to_jansky * flux * flux_band_fraction / bandwidth_hz
 
-        for wave_start, wave_end in wavelength_iterator(bandpass):
+        for wave_start, wave_end in _wavelength_iterator(bandpass):
             yield(flux_band_norm * next(bandpass_gen)
                   * sed_integrate(wave_start=wave_start, wave_end=wave_end) / sed_band_integral)
 
@@ -432,17 +487,17 @@ def star_gen(sed_list=None, seed=None, temperature=5600, metallicity=0.0, surfac
         flux_band_fraction /= radiance_full_integral
 
         radiance_band_integral = 0.0
-        for wave_start, wave_end in wavelength_iterator(bandpass):
+        for wave_start, wave_end in _wavelength_iterator(bandpass):
             radiance_band_integral += next(bandpass_gen2) * radiance_calc(wave_start, wave_end)
         flux_band_norm = flux_to_jansky * flux * flux_band_fraction / bandwidth_hz
 
-        for wave_start, wave_end in wavelength_iterator(bandpass):
+        for wave_start, wave_end in _wavelength_iterator(bandpass):
             yield(flux_band_norm * next(bandpass_gen)
                   * radiance_calc(wave_start, wave_end) / radiance_band_integral)
 
 
-def load_bandpass(band_name='g', wavelength_step=None, use_mirror=True, use_lens=True, use_atmos=True,
-                  use_filter=True, use_detector=True, **kwargs):
+def _load_bandpass(band_name='g', wavelength_step=None, use_mirror=True, use_lens=True, use_atmos=True,
+                   use_filter=True, use_detector=True, **kwargs):
     """!Load in Bandpass object from sims_photUtils."""
     class BandpassMod(Bandpass):
         """Customize a few methods of the Bandpass class from sims_photUtils."""
@@ -465,7 +520,8 @@ def load_bandpass(band_name='g', wavelength_step=None, use_mirror=True, use_lens
     band_dict = {'u': (324.0, 395.0), 'g': (405.0, 552.0), 'r': (552.0, 691.0),
                  'i': (818.0, 921.0), 'z': (922.0, 997.0), 'y': (975.0, 1075.0)}
     band_range = band_dict[band_name]
-    bandpass = BandpassMod(wavelen_min=band_range[0], wavelen_max=band_range[1], wavelen_step=wavelength_step)
+    bandpass = BandpassMod(wavelen_min=band_range[0], wavelen_max=band_range[1],
+                           wavelen_step=wavelength_step)
     throughput_dir = getPackageDir('throughputs')
     lens_list = ['baseline/lens1.dat', 'baseline/lens2.dat', 'baseline/lens3.dat']
     mirror_list = ['baseline/m1.dat', 'baseline/m2.dat', 'baseline/m3.dat']
@@ -490,7 +546,7 @@ def load_bandpass(band_name='g', wavelength_step=None, use_mirror=True, use_lens
     return(bandpass)
 
 
-def wavelength_iterator(bandpass, use_midpoint=False):
+def _wavelength_iterator(bandpass, use_midpoint=False):
     """Define iterator to ensure that loops over wavelength are consistent."""
     wave_start = bandpass.wavelen_min
     while wave_start < bandpass.wavelen_max:
@@ -504,8 +560,8 @@ def wavelength_iterator(bandpass, use_midpoint=False):
         wave_start = wave_end
 
 
-def stellar_distribution(seed=None, n_star=None, hottest_star='A', coolest_star='M',
-                         x_size=None, y_size=None, pixel_scale=None, verbose=True, **kwargs):
+def _stellar_distribution(seed=None, n_star=None, hottest_star='A', coolest_star='M',
+                          x_size=None, y_size=None, pixel_scale=None, verbose=True, **kwargs):
     """!Function that attempts to return a realistic distribution of stellar properties.
     Returns temperature, flux, metallicity, surface gravity
     temperature in units Kelvin
