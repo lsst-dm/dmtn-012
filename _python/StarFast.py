@@ -111,21 +111,8 @@ class StarSim:
                                if flux_tot[i_b] > bright_flux_threshold * flux_faint]
             bright_flag = np.zeros(n_star)
             bright_flag[bright_inds] = 1
-            # n_bright = len(i_bright)
-            # i_faint = [_i for _i in range(n_star) if _i not in i_bright]
-            # n_faint = len(i_faint)
         else:
             bright_flag = np.ones(n_star)
-            # i_faint = np.arange(0)
-            # n_bright = n_star
-            # n_faint = 0
-        # if not dcr_flag:
-        #     flux_arr = flux_tot
-        #     flux_bright = flux_arr[i_bright]
-        #     flux_arr = flux_arr[i_faint]
-        # else:
-        #     flux_bright = flux_arr[i_bright, :]
-        #     flux_arr = flux_arr[i_faint, :]
 
         self.n_star = n_star
         self.star_flux = flux_arr
@@ -386,7 +373,7 @@ def _cat_sim(x_size=None, y_size=None, seed=None, n_star=None, n_galaxy=None,
 
 
 def _star_gen(sed_list=None, seed=None, temperature=5600, metallicity=0.0, surface_gravity=1.0,
-              flux=1.0, bandpass=None):
+              flux=1.0, bandpass=None, verbose=True):
     """Generate a randomized spectrum at a given temperature over a range of wavelengths."""
     """
         Either use a supplied list of SEDs to be drawn from, or use a blackbody radiation model.
@@ -404,10 +391,11 @@ def _star_gen(sed_list=None, seed=None, temperature=5600, metallicity=0.0, surfa
         return(np.sum(var for var in generator))
 
     if sed_list is None:
-        print("No sed_list supplied, using blackbody radiation spectra.")
+        if verbose:
+            print("No sed_list supplied, using blackbody radiation spectra.")
         t_ref = [np.Inf, 0.0]
     else:
-        temperatures = np.array(star.temp for star in sed_list)
+        temperatures = np.array([star.temp for star in sed_list])
         t_ref = [temperatures.min(), temperatures.max()]
 
     bp_wavelen, bandpass_vals = bandpass.getBandpass()
@@ -650,7 +638,7 @@ def _stellar_distribution(seed=None, n_star=None, hottest_star='A', coolest_star
 
 # -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
 
-class BasicBandpass:
+class _BasicBandpass:
     """Dummy bandpass object for testing."""
 
     def __init__(self, band_name='g', wavelength_step=1):
@@ -677,6 +665,20 @@ class BasicBandpass:
         wavelengths += [self.wavelen_max]
         bp_vals = [1] * len(wavelengths)
         return((wavelengths, bp_vals))
+
+
+class _BasicSED:
+    """Dummy SED for testing."""
+
+    def __init__(self, temperature=5600.0, metallicity=0.0, surface_gravity=1.0):
+        wavelen_min = 10.0
+        wavelen_max = 2000.0
+        wavelen_step = 1
+        self.temp = temperature
+        self.logg = surface_gravity
+        self.logZ = metallicity
+        self.wavelen = np.arange(wavelen_min, wavelen_max, wavelen_step)
+        self.flambda = np.arange(wavelen_min, wavelen_max, wavelen_step) / wavelen_max
 
 
 class CoordinatesTestCase(utilsTests.TestCase):
@@ -851,18 +853,79 @@ class StarGenTestCase(utilsTests.TestCase):
 
     def setUp(self):
         """Define parameters used by every test."""
-        self.bandpass = BasicBandpass(band_name='g', wavelength_step=10)
+        self.bandpass = _BasicBandpass(band_name='g', wavelength_step=10)
         self.flux = 1E-9
-        self.star_gen = _star_gen(temperature=5600, flux=self.flux, bandpass=self.bandpass)
+
+    def tearDown(self):
+        """Clean up."""
+        del self.bandpass
 
     def test_blackbody_spectrum(self):
-        spectrum = np.array([flux for flux in self.star_gen])
+        """Check the blackbody spectrum against pre-computed values."""
+        star_gen = _star_gen(temperature=5600, flux=self.flux, bandpass=self.bandpass, verbose=False)
+        spectrum = np.array([flux for flux in star_gen])
         pre_comp_spectrum = np.array([5.763797967, 5.933545118, 6.083468705, 6.213969661,
                                       6.325613049, 6.419094277, 6.495208932, 6.554826236,
                                       6.598866015, 6.628278971, 6.644030031, 6.647084472,
                                       6.638396542, 6.618900302, 4.616292143])
         abs_diff_spectrum = np.sum(np.abs(spectrum - pre_comp_spectrum))
         self.assertAlmostEqual(abs_diff_spectrum, 0.0)
+
+    def test_sed_spectrum(self):
+        """Check a spectrum defined by an SED against pre-computed values."""
+        temperature = 5600
+        sed_list = [_BasicSED(temperature)]
+        star_gen = _star_gen(sed_list=sed_list, temperature=temperature, flux=self.flux,
+                             bandpass=self.bandpass, verbose=True)
+        spectrum = np.array([flux for flux in star_gen])
+        pre_comp_spectrum = np.array([1.06433106, 1.09032205, 1.11631304, 1.14230403, 1.16829502,
+                                      1.19428601, 1.22027700, 1.24626799, 1.27225898, 1.29824997,
+                                      1.32424096, 1.35023195, 1.37622294, 1.40221393, 0.99701439])
+        abs_diff_spectrum = np.sum(np.abs(spectrum - pre_comp_spectrum))
+        self.assertAlmostEqual(abs_diff_spectrum, 0.0)
+
+
+class StellarDistributionTestCase(utilsTests.TestCase):
+    """Verify that the random catalog generation is unchanged."""
+
+    def setUp(self):
+        """Define parameters used by every test."""
+        self.x_size = 10
+        self.y_size = 10
+        self.pixel_scale = 0.25
+        self.seed = 42
+
+    def test_star_type_properties(self):
+        """Check that the properties of stars of a given type all fall in the right ranges."""
+        star_properties = _stellar_distribution(seed=self.seed, n_star=3, pixel_scale=self.pixel_scale,
+                                                x_size=self.x_size, y_size=self.y_size,
+                                                hottest_star='G', coolest_star='G', verbose=False)
+        temperature = star_properties[0]
+        metallicity = star_properties[2]
+        surface_gravity = star_properties[3]
+        temp_range_g_star = [5200, 6000]
+        grav_range_g_star = [0.0, 1.5]
+        metal_range_g_star = [-3.0, 0.5]
+        self.assertLessEqual(np.max(temperature), temp_range_g_star[1])
+        self.assertGreaterEqual(np.min(temperature), temp_range_g_star[0])
+
+        self.assertLessEqual(np.max(surface_gravity), grav_range_g_star[1])
+        self.assertGreaterEqual(np.min(surface_gravity), grav_range_g_star[0])
+
+        self.assertLessEqual(np.max(metallicity), metal_range_g_star[1])
+        self.assertGreaterEqual(np.min(metallicity), metal_range_g_star[0])
+
+    def test_star_xy_range(self):
+        """Check that star pixel coordinates are all in range."""
+        star_properties = _stellar_distribution(seed=self.seed, n_star=3, pixel_scale=self.pixel_scale,
+                                                x_size=self.x_size, y_size=self.y_size, verbose=False)
+        x = star_properties[4]
+        y = star_properties[5]
+        self.assertLess(np.max(x), self.x_size)
+        self.assertGreaterEqual(np.min(x), 0.0)
+
+        self.assertLess(np.max(y), self.y_size)
+        self.assertGreaterEqual(np.min(y), 0.0)
 
 
 def suite():
@@ -871,10 +934,11 @@ def suite():
 
     suites = []
     suites += unittest.makeSuite(CoordinatesTestCase)
-    suites += unittest.makeSuite(utilsTests.MemoryTestCase)
     suites += unittest.makeSuite(DCRTestCase)
     suites += unittest.makeSuite(BandpassTestCase)
     suites += unittest.makeSuite(StarGenTestCase)
+    suites += unittest.makeSuite(StellarDistributionTestCase)
+    suites += unittest.makeSuite(utilsTests.MemoryTestCase)
     return unittest.TestSuite(suites)
 
 
