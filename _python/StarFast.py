@@ -12,6 +12,8 @@ from lsst.utils import getPackageDir
 from calc_refractive_index import diff_refraction
 from fast_dft import fast_dft
 import time
+import unittest
+import lsst.utils.tests as utilsTests
 photons_per_adu = 1e4  # used only to approximate the effect of photon shot noise, if photon_noise=True
 
 
@@ -37,10 +39,6 @@ class StarSim:
                 edge_dist = 0
             else:
                 edge_dist = 5 * psf.getFWHM() * fwhm_to_sigma / pixel_scale
-        # self.pixel_scale = pixel_scale
-        # self.x_size = x_size
-        # self.y_size = y_size
-        # self.pad_image = pad_image
         self.psf = psf
         self.edge_dist = edge_dist
         self.kernel_radius = np.ceil(5 * psf.getFWHM() * fwhm_to_sigma / pixel_scale)
@@ -54,8 +52,7 @@ class StarSim:
             sed_list = matchStarObj.loadKuruczSEDs()
         self.sed_list = sed_list
         self.catalog = catalog
-        self.coord = self._CoordsXY(pixel_scale=pixel_scale, pad_image=pad_image,
-                                    x_size=x_size, y_size=y_size)
+        self.coord = _CoordsXY(pixel_scale=pixel_scale, pad_image=pad_image, x_size=x_size, y_size=y_size)
         self.source_model = None
         self.bright_model = None
         self.n_star = None
@@ -65,7 +62,6 @@ class StarSim:
         bright_sigma_threshold = 3.0
         bright_flux_threshold = 0.1
         CoordsXY = self.coord
-        # print("Kernel radius used: ", kernel_radius)
         if self.catalog is None:
             self.catalog = _cat_sim(x_size=CoordsXY.xsize(base=True), y_size=CoordsXY.ysize(base=True),
                                     name=name, n_star=n_star, pixel_scale=CoordsXY.pixel_scale,
@@ -236,72 +232,73 @@ class StarSim:
                             + 1j * rand_gen.normal(scale=amplitude_use, size=(y_size_use, x_size_use)))
                 yield(rand_fft)
 
-    class _CoordsXY:
-        def __init__(self, pad_image=1.5, pixel_scale=None, x_size=None, y_size=None):
-            self._x_size = x_size
-            self._y_size = y_size
-            self.pixel_scale = pixel_scale
-            self.oversample = 1
-            self.pad = pad_image
-            self.flag = None
 
-        def set_x(self, x_loc):
-            self._x = x_loc
+class _CoordsXY:
+    def __init__(self, pad_image=1.5, pixel_scale=None, x_size=None, y_size=None):
+        self._x_size = x_size
+        self._y_size = y_size
+        self.pixel_scale = pixel_scale
+        self.oversample = 1
+        self.pad = pad_image
+        self.flag = None
 
-        def set_y(self, y_loc):
-            self._y = y_loc
+    def set_x(self, x_loc):
+        self._x = x_loc
 
-        def set_flag(self, flag):
-            self.flag = flag.astype(bool)
+    def set_y(self, y_loc):
+        self._y = y_loc
 
-        def n_flag(self):
-            if self.flag is None:
-                n = 0
-            else:
-                n = np.sum(self.flag)
-            return(n)
+    def set_flag(self, flag):
+        self.flag = flag.astype(bool)
 
-        def set_oversample(self, oversample):
-            self.oversample = int(oversample)
+    def n_flag(self):
+        if self.flag is None:
+            n = 0
+        else:
+            n = np.sum(self.flag)
+        return(n)
 
-        def xsize(self, base=False):
-            if base:
-                return(self._x_size)
-            else:
-                return(int(self._x_size * self.pad) * self.oversample)
+    def set_oversample(self, oversample):
+        self.oversample = int(oversample)
 
-        def xmin(self):
-            return(self.oversample * (self._x_size * (self.pad - 1) // 2))
+    def xsize(self, base=False):
+        if base:
+            return(int(self._x_size))
+        else:
+            return(int(self._x_size * self.pad) * self.oversample)
 
-        def xmax(self):
-            return(self.xmin() + self._x_size * self.oversample)
+    def xmin(self):
+        return(int(self.oversample * (self._x_size * (self.pad - 1) // 2)))
 
-        def ysize(self, base=False):
-            if base:
-                return(self._y_size)
-            else:
-                return(int(self._y_size * self.pad) * self.oversample)
+    def xmax(self):
+        return(int(self.xmin() + self._x_size * self.oversample))
 
-        def ymin(self):
-            return(self.oversample * (self._y_size * (self.pad - 1) // 2))
+    def ysize(self, base=False):
+        if base:
+            return(int(self._y_size))
+        else:
+            return(int(self._y_size * self.pad) * self.oversample)
 
-        def ymax(self):
-            return(self.ymin() + self._y_size * self.oversample)
+    def ymin(self):
+        return(int(self.oversample * (self._y_size * (self.pad - 1) // 2)))
 
-        def scale(self):
-            return(self.pixel_scale / self.oversample)
+    def ymax(self):
+        return(int(self.ymin() + self._y_size * self.oversample))
 
-        def x_loc(self, bright=False):
-            x_loc = self._x * self.oversample + self.xmin()
-            if self.flag is not None:
-                x_loc = x_loc[self.flag == bright]
-            return(x_loc)
+    def scale(self):
+        return(self.pixel_scale / self.oversample)
 
-        def y_loc(self, bright=False):
-            y_loc = self._y * self.oversample + self.ymin()
-            if self.flag is not None:
-                y_loc = y_loc[self.flag == bright]
-            return(y_loc)
+    def x_loc(self, bright=False):
+        x_loc = self._x * self.oversample + self.xmin()
+        if self.flag is not None:
+            x_loc = x_loc[self.flag == bright]
+        return(x_loc)
+
+    def y_loc(self, bright=False):
+        y_loc = self._y * self.oversample + self.ymin()
+        if self.flag is not None:
+            y_loc = y_loc[self.flag == bright]
+        return(y_loc)
 
 
 def _timing_report(n_star=None, bright=False, timing=None):
@@ -649,3 +646,241 @@ def _stellar_distribution(seed=None, n_star=None, hottest_star='A', coolest_star
     if verbose:
         print(info_string)
     return((temperature, flux, metallicity, surface_gravity, x_star, y_star))
+
+
+# -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-
+
+class BasicBandpass:
+    """Dummy bandpass object for testing."""
+
+    def __init__(self, band_name='g', wavelength_step=1):
+        """Define the wavelength range and resolution for a given ugrizy band."""
+        band_dict = {'u': (324.0, 395.0), 'g': (405.0, 552.0), 'r': (552.0, 691.0),
+                     'i': (818.0, 921.0), 'z': (922.0, 997.0), 'y': (975.0, 1075.0)}
+        band_range = band_dict[band_name]
+        self.wavelen_min = band_range[0]
+        self.wavelen_max = band_range[1]
+        self.wavelen_step = wavelength_step
+
+    def calc_eff_wavelen(self, wavelength_min=None, wavelength_max=None):
+        """Mimic the calc_eff_wavelen method of the real bandpass class."""
+        if wavelength_min is None:
+            wavelength_min = self.wavelen_min
+        if wavelength_max is None:
+            wavelength_max = self.wavelen_max
+        return((wavelength_min + wavelength_max) / 2.0)
+
+    def getBandpass(self):
+        """Mimic the getBandpass method of the real bandpass class."""
+        wl_gen = _wavelength_iterator(self)
+        wavelengths = [wl[0] for wl in wl_gen]
+        wavelengths += [self.wavelen_max]
+        bp_vals = [1] * len(wavelengths)
+        return((wavelengths, bp_vals))
+
+
+class CoordinatesTestCase(utilsTests.TestCase):
+    """Test the simple coordinate transformation class."""
+
+    def setUp(self):
+        """Define parameters used by every test."""
+        seed = 42
+        rand_gen = np.random
+        rand_gen.seed(seed)
+        self.pixel_scale = 0.25
+        self.pad_image = 1.5
+        self.x_size = 128
+        self.y_size = 128
+        self.n_star = 30
+        self.n_bright = 10
+        self.x_loc = rand_gen.uniform(high=self.x_size, size=self.n_star)
+        self.y_loc = rand_gen.uniform(high=self.y_size, size=self.n_star)
+        self.flag_array = np.array([False] * self.n_star)
+        self.flag_array[:2 * self.n_bright:2] = True
+        self.coords = _CoordsXY(pixel_scale=self.pixel_scale, pad_image=self.pad_image,
+                                x_size=self.x_size, y_size=self.y_size)
+
+    def tearDown(self):
+        """Clean up."""
+        del self.coords
+        del self.flag_array
+
+    def test_coord_size_normal_scale(self):
+        """Make sure everything gets set, and the math is correct."""
+        self.assertAlmostEqual(self.pad_image * self.x_size, self.coords.xsize())
+        self.assertAlmostEqual(self.pad_image * self.y_size, self.coords.ysize())
+
+    def test_coord_size_no_scale(self):
+        """Make sure we can recover input dimensions."""
+        self.assertAlmostEqual(self.x_size, self.coords.xsize(base=True))
+        self.assertAlmostEqual(self.y_size, self.coords.ysize(base=True))
+
+    def test_coord_size_over_scale(self):
+        """Make sure everything gets set, and the math is correct."""
+        self.coords.set_oversample(2)
+        self.assertAlmostEqual(2 * self.pad_image * self.x_size, self.coords.xsize())
+        self.assertAlmostEqual(2 * self.pad_image * self.y_size, self.coords.ysize())
+
+    def test_coord_size_over_scale_nonint(self):
+        """Oversampling must only by integer factors."""
+        self.coords.set_oversample(2.3)
+        self.assertAlmostEqual(2 * self.pad_image * self.x_size, self.coords.xsize())
+        self.assertAlmostEqual(2 * self.pad_image * self.y_size, self.coords.ysize())
+
+    def test_coord_pixel_scale_base(self):
+        """Make sure everything gets set, and the math is correct."""
+        self.assertEqual(self.pixel_scale, self.coords.scale())
+
+    def test_coord_pixel_scale_over(self):
+        """Make sure everything gets set, and the math is correct."""
+        self.coords.set_oversample(2)
+        self.assertEqual(self.pixel_scale / 2, self.coords.scale())
+
+    def test_bright_count(self):
+        """Check that the number of locations flagged as bright is correct."""
+        self.coords.set_flag(self.flag_array)
+        self.assertEqual(self.n_bright, self.coords.n_flag())
+
+    def test_faint_source_locations(self):
+        """Check that locations of faint sources are computed correctly, and that flags are correct."""
+        CoordsXY = self.coords
+        CoordsXY.set_x(self.x_loc)
+        CoordsXY.set_y(self.y_loc)
+        CoordsXY.set_flag(self.flag_array)
+        bright_condition = True
+        faint_x = self.x_loc[self.flag_array != bright_condition]
+        faint_y = self.y_loc[self.flag_array != bright_condition]
+        abs_diff_x = np.sum(np.abs(faint_x + CoordsXY.xmin() - CoordsXY.x_loc()))
+        abs_diff_y = np.sum(np.abs(faint_y + CoordsXY.ymin() - CoordsXY.y_loc()))
+        self.assertAlmostEqual(abs_diff_x, 0)
+        self.assertAlmostEqual(abs_diff_y, 0)
+
+    def test_bright_source_locations(self):
+        """Check that locations of bright sources are computed correctly, and that flags are correct."""
+        CoordsXY = self.coords
+        CoordsXY.set_x(self.x_loc)
+        CoordsXY.set_y(self.y_loc)
+        CoordsXY.set_flag(self.flag_array)
+        CoordsXY.set_oversample(2)
+        bright_condition = True
+        bright_x = 2 * self.x_loc[self.flag_array == bright_condition]
+        bright_y = 2 * self.y_loc[self.flag_array == bright_condition]
+        abs_diff_x = np.sum(np.abs(bright_x + CoordsXY.xmin() - CoordsXY.x_loc(bright=True)))
+        abs_diff_y = np.sum(np.abs(bright_y + CoordsXY.ymin() - CoordsXY.y_loc(bright=True)))
+        self.assertAlmostEqual(abs_diff_x, 0)
+        self.assertAlmostEqual(abs_diff_y, 0)
+
+    def test_faint_sources_no_flags(self):
+        """If there are no flags, all source locations should always be returned."""
+        CoordsXY = self.coords
+        CoordsXY.set_x(self.x_loc)
+        CoordsXY.set_y(self.y_loc)
+        self.assertEqual(len(CoordsXY.x_loc()), self.n_star)
+        self.assertEqual(len(CoordsXY.y_loc()), self.n_star)
+
+    def test_bright_sources_no_flags(self):
+        """If there are no flags, all source locations should always be returned."""
+        CoordsXY = self.coords
+        CoordsXY.set_oversample(2)
+        CoordsXY.set_x(self.x_loc)
+        CoordsXY.set_y(self.y_loc)
+        self.assertEqual(len(CoordsXY.x_loc(bright=True)), self.n_star)
+        self.assertEqual(len(CoordsXY.y_loc(bright=True)), self.n_star)
+
+
+class DCRTestCase(utilsTests.TestCase):
+    """Test the the calculations of Differential Chromatic Refraction."""
+
+    def setUp(self):
+        """Define parameters used by every test."""
+        band_name = 'g'
+        wavelength_step = 10.0
+        self.pixel_scale = 0.25
+        self.bandpass = _load_bandpass(band_name=band_name, wavelength_step=wavelength_step)
+
+    def tearDown(self):
+        """Clean up."""
+        del self.bandpass
+
+    def test_dcr_generator(self):
+        """Check that _dcr_generator returns a generator with n_step iterations, and (0,0) at zenith."""
+        azimuth = 0.0
+        elevation = 90.0
+        zenith_dcr = (0.0, 0.0)
+        bp = self.bandpass
+        dcr_gen = _dcr_generator(bp, pixel_scale=self.pixel_scale, elevation=elevation, azimuth=azimuth)
+        n_step = int(np.ceil((bp.wavelen_max - bp.wavelen_min) / bp.wavelen_step))
+        for _i in range(n_step):
+            self.assertAlmostEqual(next(dcr_gen), zenith_dcr)
+        with self.assertRaises(StopIteration):
+            next(dcr_gen)
+
+    def test_dcr_values(self):
+        """Check DCR against pre-computed values."""
+        azimuth = 0.0
+        elevation = 50.0
+        dcr_vals = [1.73959243097, 1.44317957935, 1.1427147535, 0.864107322861, 0.604249563363,
+                    0.363170721045, 0.137678490152, -0.0730964797295, -0.270866384702, -0.455135994183,
+                    -0.628721688199, -0.791313886049, -0.946883455499, -1.08145326102, -1.16120917137]
+        bp = self.bandpass
+        dcr_gen = _dcr_generator(bp, pixel_scale=self.pixel_scale, elevation=elevation, azimuth=azimuth)
+        n_step = int(np.ceil((bp.wavelen_max - bp.wavelen_min) / bp.wavelen_step))
+        for _i in range(n_step):
+            self.assertAlmostEqual(next(dcr_gen)[1], dcr_vals[_i])
+
+
+class BandpassTestCase(utilsTests.TestCase):
+    """Tests of the interface to Bandpass from lsst.sims.photUtils."""
+
+    def setUp(self):
+        """Define parameters used by every test."""
+        self.band_name = 'g'
+        self.wavelength_step = 10
+        self.bandpass = _load_bandpass(band_name=self.band_name, wavelength_step=self.wavelength_step)
+
+    def test_step_bandpass(self):
+        """Check that the bandpass has necessary methods, and those return the correct number of values."""
+        bp = self.bandpass
+        bp_wavelen, bandpass_vals = bp.getBandpass()
+        n_step = int(np.ceil((bp.wavelen_max - bp.wavelen_min) / bp.wavelen_step))
+        self.assertEqual(n_step + 1, len(bandpass_vals))
+
+
+class StarGenTestCase(utilsTests.TestCase):
+    """Test the flux calculation for a single star."""
+
+    def setUp(self):
+        """Define parameters used by every test."""
+        self.bandpass = BasicBandpass(band_name='g', wavelength_step=10)
+        self.flux = 1E-9
+        self.star_gen = _star_gen(temperature=5600, flux=self.flux, bandpass=self.bandpass)
+
+    def test_blackbody_spectrum(self):
+        spectrum = np.array([flux for flux in self.star_gen])
+        pre_comp_spectrum = np.array([5.763797967, 5.933545118, 6.083468705, 6.213969661,
+                                      6.325613049, 6.419094277, 6.495208932, 6.554826236,
+                                      6.598866015, 6.628278971, 6.644030031, 6.647084472,
+                                      6.638396542, 6.618900302, 4.616292143])
+        abs_diff_spectrum = np.sum(np.abs(spectrum - pre_comp_spectrum))
+        self.assertAlmostEqual(abs_diff_spectrum, 0.0)
+
+
+def suite():
+    """Return a suite containing all the test cases in this module."""
+    utilsTests.init()
+
+    suites = []
+    suites += unittest.makeSuite(CoordinatesTestCase)
+    suites += unittest.makeSuite(utilsTests.MemoryTestCase)
+    suites += unittest.makeSuite(DCRTestCase)
+    suites += unittest.makeSuite(BandpassTestCase)
+    suites += unittest.makeSuite(StarGenTestCase)
+    return unittest.TestSuite(suites)
+
+
+def run(shouldExit=False):
+    """Run the tests."""
+    utilsTests.run(suite(), shouldExit)
+
+if __name__ == "__main__":
+    run(True)
