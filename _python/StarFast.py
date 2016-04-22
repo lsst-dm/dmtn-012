@@ -22,7 +22,7 @@ class StarSim:
 
     def __init__(self, psf=None, pixel_scale=0.25, pad_image=1.5, catalog=None,
                  x_size=512, y_size=512, band_name='g', sed_list=None,
-                 astrometric_error=None, **kwargs):
+                 astrometric_error=None, edge_dist=None, kernel_radius=None, **kwargs):
         """Set up the fixed parameters of the simulation."""
         # if psf is None:
         #     import galsim
@@ -40,6 +40,18 @@ class StarSim:
         self.sed_list = sed_list
         self.catalog = catalog
         self.coord = _CoordsXY(pixel_scale=pixel_scale, pad_image=pad_image, x_size=x_size, y_size=y_size)
+        fwhm_to_sigma = 1.0 / (2.0 * np.sqrt(2. * np.log(2)))
+        CoordsXY = self.coord
+        if edge_dist is None:
+            if CoordsXY.pad > 1:
+                self.edge_dist = 0
+            else:
+                self.edge_dist = 5 * psf.getFWHM() * fwhm_to_sigma / CoordsXY.scale()
+        if kernel_radius is None:
+            self.kernel_radius = np.ceil(5 * psf.getFWHM() * fwhm_to_sigma / CoordsXY.scale())
+        else:
+            self.kernel_radius = kernel_radius
+        self.psf = psf
         if psf is not None:
             self.load_psf(psf, **kwargs)
         self.source_model = None
@@ -192,37 +204,27 @@ class StarSim:
         else:
             CoordsXY.set_oversample(1)
         dcr_gen = _dcr_generator(self.bandpass, pixel_scale=CoordsXY.scale(), **kwargs)
-        convol = np.zeros((CoordsXY.ysize(), CoordsXY.xsize()), dtype='complex64')
+        convol = np.zeros((CoordsXY.ysize(), CoordsXY.xsize() // 2 + 1), dtype='complex64')
         if psf is None:
             psf = self.psf
         timing_fft = -time.time()
 
-        def _offset_to_phase(offset, x_size=None, y_size=None):
-            x_phase = np.exp(-2j * np.pi * (offset[0]) * (np.arange(x_size) - x_size / 2 + 1) / x_size)
-            # x_phase = np.einsum('i,j->ij', np.ones(y_size), x_phase)
-            y_phase = np.exp(-2j * np.pi * (offset[1]) * (np.arange(y_size) - y_size / 2 + 1) / y_size)
-            phase = np.einsum('i,j->ij', y_phase, x_phase)
-            # phase = np.exp(-2j * np.pi * (x_phase + y_phase))
-            return(fftshift(phase))
-
-        psf_fft = self.psf_ft[CoordsXY.oversample]
         for _i, offset in enumerate(dcr_gen):
             if bright:
                 source_model_use = self.bright_model[_i]
             else:
                 source_model_use = self.source_model[_i]
 
-            # psf_image = psf.drawImage(scale=CoordsXY.scale(), method='fft', offset=offset,
-            #                           nx=CoordsXY.xsize(), ny=CoordsXY.ysize(), use_true_center=False)
+            psf_image = psf.drawImage(scale=CoordsXY.scale(), method='fft', offset=offset,
+                                      nx=CoordsXY.xsize(), ny=CoordsXY.ysize(), use_true_center=False)
             try:
                 #  Note: if adding sky noise, it should only added once (check if the generator is exhausted)
                 source_model_use += next(sky_noise_gen)
             except StopIteration:
                 pass
-            phase_offset = _offset_to_phase(offset, x_size=CoordsXY.xsize(), y_size=CoordsXY.ysize())
-            convol_single = source_model_use * (psf_fft * phase_offset)
+            convol_single = source_model_use * rfft2(psf_image.array)
             convol += convol_single
-        return_image = np.real(fftshift(ifft2(convol))) * CoordsXY.oversample**2.0
+        return_image = np.real(fftshift(irfft2(convol))) * CoordsXY.oversample**2.0
         timing_fft += time.time()
         if verbose:
             print("FFT timing for %i DCR planes: [%0.3fs | %0.3fs per plane]"

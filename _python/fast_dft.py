@@ -189,9 +189,9 @@ def fast_dft(amplitudes, x_loc, y_loc, x_size=None, y_size=None, no_fft=True, ke
     if not no_fft:
         if multi_catalog:
             for _i, model in enumerate(model_img):
-                model_img[_i] = np.fft.fft2(model)
+                model_img[_i] = np.fft.rfft2(model)
         else:
-            model_img = np.fft.fft2(model_img)
+            model_img = np.fft.rfft2(model_img)
     return(model_img)
 
 
