@@ -1,7 +1,7 @@
 """Function to generate simulated catalogs with reproduceable source spectra to feed into fast_dft."""
 from __future__ import print_function, division, absolute_import
 import numpy as np
-from numpy.fft import rfft2, irfft2, fftshift
+from numpy.fft import rfft2, irfft2, fftshift, ifftshift, fft2, ifft2
 from scipy import constants
 import lsst.afw.geom as afwGeom
 import lsst.afw.table as afwTable
@@ -21,27 +21,14 @@ class StarSim:
     """Class that defines a random simulated region of sky, and allows fast transformations."""
 
     def __init__(self, psf=None, pixel_scale=0.25, pad_image=1.5, catalog=None,
-                 x_size=512, y_size=512, sky_noise=0.0, instrument_noise=0.0, photon_noise=False,
-                 band_name='g', sed_list=None,
-                 astrometric_error=None, edge_dist=None, **kwargs):
+                 x_size=512, y_size=512, band_name='g', sed_list=None,
+                 astrometric_error=None, **kwargs):
         """Set up the fixed parameters of the simulation."""
         # if psf is None:
         #     import galsim
         #     self.psf = galsim.Kolmogorov(fwhm=1)
         # else:
         #     self.psf = psf
-        # I think most PSF classes have a getFWHM method. The math converts to a sigma for a gaussian.
-        fwhm_to_sigma = 1.0 / (2.0 * np.sqrt(2. * np.log(2)))
-        if pixel_scale is None:
-            pixel_scale = psf.getFWHM() * fwhm_to_sigma
-        if edge_dist is None:
-            if pad_image > 1:
-                edge_dist = 0
-            else:
-                edge_dist = 5 * psf.getFWHM() * fwhm_to_sigma / pixel_scale
-        self.psf = psf
-        self.edge_dist = edge_dist
-        self.kernel_radius = np.ceil(5 * psf.getFWHM() * fwhm_to_sigma / pixel_scale)
 
         bandpass = _load_bandpass(band_name=band_name, **kwargs)
         self.n_step = int(np.ceil((bandpass.wavelen_max - bandpass.wavelen_min) / bandpass.wavelen_step))
@@ -53,9 +40,31 @@ class StarSim:
         self.sed_list = sed_list
         self.catalog = catalog
         self.coord = _CoordsXY(pixel_scale=pixel_scale, pad_image=pad_image, x_size=x_size, y_size=y_size)
+        if psf is not None:
+            self.load_psf(psf, **kwargs)
         self.source_model = None
         self.bright_model = None
         self.n_star = None
+
+    def load_psf(self, psf, edge_dist=None, kernel_radius=None, **kwargs):
+        # I think most PSF classes have a getFWHM method. The math converts to a sigma for a gaussian.
+        fwhm_to_sigma = 1.0 / (2.0 * np.sqrt(2. * np.log(2)))
+        CoordsXY = self.coord
+        if edge_dist is None:
+            if CoordsXY.pad > 1:
+                edge_dist = 0
+            else:
+                edge_dist = 5 * psf.getFWHM() * fwhm_to_sigma / CoordsXY.scale()
+        self.psf = psf
+        CoordsXY.set_oversample(2)
+        psf_image_bright = psf.drawImage(scale=CoordsXY.scale(), method='fft', offset=(0, 0),
+                                         nx=CoordsXY.xsize(), ny=CoordsXY.ysize(), use_true_center=False)
+        CoordsXY.set_oversample(1)
+        psf_image = psf.drawImage(scale=CoordsXY.scale(), method='fft', offset=(0, 0),
+                                  nx=CoordsXY.xsize(), ny=CoordsXY.ysize(), use_true_center=False)
+        self.psf_ft = {1: fft2(psf_image.array), 2: fft2(psf_image_bright.array)}
+        self.edge_dist = edge_dist
+        self.kernel_radius = np.ceil(5 * psf.getFWHM() * fwhm_to_sigma / CoordsXY.scale())
 
     def load_catalog(self, name=None, sed_list=None, n_star=None, **kwargs):
         """Load or generate a catalog of stars to be used for the simulations."""
@@ -147,9 +156,11 @@ class StarSim:
             if verbose:
                 print(_timing_report(n_star=n_bright, bright=True, timing=timing_model))
 
-    def convolve(self, seed=None, sky_noise=0, verbose=True, **kwargs):
+    def convolve(self, seed=None, sky_noise=0, instrument_noise=0, photon_noise=0, verbose=True, **kwargs):
         """Convolve a simulated sky with a given PSF."""
-        sky_noise_gen = self._sky_noise_gen(seed=seed, amplitude=sky_noise)
+        CoordsXY = self.coord
+        sky_noise_gen = _sky_noise_gen(CoordsXY, seed=seed, amplitude=sky_noise,
+                                       n_step=self.n_step, verbose=verbose)
         if self.source_model is not None:
             source_image = self._convolve_subroutine(sky_noise_gen, verbose=verbose, bright=False, **kwargs)
         else:
@@ -159,6 +170,19 @@ class StarSim:
         else:
             bright_image = 0.0
         return_image = source_image + bright_image
+
+        if photon_noise > 0:
+            rand_gen = np.random
+            if seed is not None:
+                rand_gen.seed(seed - 1.2)
+            sky_photons = np.sqrt(np.abs(return_image * photons_per_adu)) / photons_per_adu
+            return_image += sky_photons * rand_gen.normal(scale=photon_noise, size=return_image.shape)
+
+        if instrument_noise > 0:
+            rand_gen = np.random
+            if seed is not None:
+                rand_gen.seed(seed - 1.1)
+            return_image += rand_gen.normal(scale=instrument_noise, size=return_image.shape)
         return(return_image)
 
     def _convolve_subroutine(self, sky_noise_gen, psf=None, verbose=True, bright=False, **kwargs):
@@ -168,56 +192,64 @@ class StarSim:
         else:
             CoordsXY.set_oversample(1)
         dcr_gen = _dcr_generator(self.bandpass, pixel_scale=CoordsXY.scale(), **kwargs)
-        # The images are purely real, so we can save time by using the real FFT,
-        # which uses only half of the complex plane
-        convol = np.zeros((CoordsXY.ysize(), CoordsXY.xsize() // 2 + 1), dtype='complex64')
+        convol = np.zeros((CoordsXY.ysize(), CoordsXY.xsize()), dtype='complex64')
         if psf is None:
             psf = self.psf
         timing_fft = -time.time()
 
+        def _offset_to_phase(offset, x_size=None, y_size=None):
+            x_phase = np.exp(-2j * np.pi * (offset[0]) * (np.arange(x_size) - x_size / 2 + 1) / x_size)
+            # x_phase = np.einsum('i,j->ij', np.ones(y_size), x_phase)
+            y_phase = np.exp(-2j * np.pi * (offset[1]) * (np.arange(y_size) - y_size / 2 + 1) / y_size)
+            phase = np.einsum('i,j->ij', y_phase, x_phase)
+            # phase = np.exp(-2j * np.pi * (x_phase + y_phase))
+            return(fftshift(phase))
+
+        psf_fft = self.psf_ft[CoordsXY.oversample]
         for _i, offset in enumerate(dcr_gen):
             if bright:
                 source_model_use = self.bright_model[_i]
             else:
                 source_model_use = self.source_model[_i]
 
-            psf_image = psf.drawImage(scale=CoordsXY.scale(), method='fft', offset=offset,
-                                      nx=CoordsXY.xsize(), ny=CoordsXY.ysize(), use_true_center=False)
-            # if photon_noise:
-            #     base_noise = np.random.normal(scale=1.0, size=(y_size_use, x_size_use))
-            #     base_noise *= np.sqrt(np.abs(source_image_use) / photons_per_adu)
-            #     source_image_use += base_noise
+            # psf_image = psf.drawImage(scale=CoordsXY.scale(), method='fft', offset=offset,
+            #                           nx=CoordsXY.xsize(), ny=CoordsXY.ysize(), use_true_center=False)
             try:
+                #  Note: if adding sky noise, it should only added once (check if the generator is exhausted)
                 source_model_use += next(sky_noise_gen)
             except StopIteration:
                 pass
-            convol_single = source_model_use * rfft2(psf_image.array)
+            phase_offset = _offset_to_phase(offset, x_size=CoordsXY.xsize(), y_size=CoordsXY.ysize())
+            convol_single = source_model_use * (psf_fft * phase_offset)
             convol += convol_single
-        return_image = np.real(fftshift(irfft2(convol))) * CoordsXY.oversample**2.0
+        return_image = np.real(fftshift(ifft2(convol))) * CoordsXY.oversample**2.0
         timing_fft += time.time()
         if verbose:
             print("FFT timing for %i DCR planes: [%0.3fs | %0.3fs per plane]"
-                  % (_i, timing_fft, timing_fft / _i))
+                  % (self.n_step, timing_fft, timing_fft / self.n_step))
         return_image = return_image[CoordsXY.ymin():CoordsXY.ymax():CoordsXY.oversample,
                                     CoordsXY.xmin():CoordsXY.xmax():CoordsXY.oversample]
         if bright:
             CoordsXY.set_oversample(1)
         return(return_image)
 
-    def _sky_noise_gen(self, seed=None, amplitude=None):
-        """Generate random sky noise in Fourier space."""
-        if amplitude > 0:
-            rand_gen = np.random
-            if seed is not None:
-                rand_gen.seed(seed - 1)
-            CoordsXY = self.coord
-            y_size_use = CoordsXY.ysize()
-            x_size_use = CoordsXY.xsize() // 2 + 1
-            amplitude_use = amplitude / (np.sqrt(2.0 * self.n_step * x_size_use * y_size_use))
-            for _i in range(self.n_step):
-                rand_fft = (rand_gen.normal(scale=amplitude_use, size=(y_size_use, x_size_use))
-                            + 1j * rand_gen.normal(scale=amplitude_use, size=(y_size_use, x_size_use)))
-                yield(rand_fft)
+
+def _sky_noise_gen(CoordsXY, seed=None, amplitude=None, n_step=1, verbose=False):
+    """Generate random sky noise in Fourier space."""
+    if amplitude > 0:
+        if verbose:
+            print("Adding sky noise with amplitude %f" % amplitude)
+        rand_gen = np.random
+        if seed is not None:
+            rand_gen.seed(seed - 1)
+        #  Note: it's important to use CoordsXY.xsize() here, since CoordsXY is updated for bright stars
+        y_size_use = CoordsXY.ysize()
+        x_size_use = CoordsXY.xsize() // 2 + 1
+        amplitude_use = amplitude / (np.sqrt(n_step / (x_size_use * y_size_use)))
+        for _i in range(n_step):
+            rand_fft = (rand_gen.normal(scale=amplitude_use, size=(y_size_use, x_size_use))
+                        + 1j * rand_gen.normal(scale=amplitude_use, size=(y_size_use, x_size_use)))
+            yield(rand_fft)
 
 
 class _CoordsXY:
@@ -928,6 +960,29 @@ class StellarDistributionTestCase(utilsTests.TestCase):
         self.assertGreaterEqual(np.min(y), 0.0)
 
 
+class SkyNoiseTestCase(utilsTests.TestCase):
+    """Verify that the random catalog generation is unchanged."""
+
+    def setUp(self):
+        """Define parameters used by every test."""
+        self.coord = _CoordsXY(pad_image=1, x_size=64, y_size=64)
+        self.n_step = 3
+        self.amplitude = 1.0
+        self.seed = 3
+
+    def test_noise_sigma(self):
+        """The sky noise should be normalized such that the standard deviation of the image == amplitude."""
+        CoordsXY = self.coord
+        noise_gen = _sky_noise_gen(CoordsXY, seed=self.seed, amplitude=self.amplitude,
+                                   n_step=self.n_step, verbose=False)
+        noise_fft = next(noise_gen)
+        for fft_single in noise_gen:
+            noise_fft += fft_single
+        noise_image = np.real(fftshift(irfft2(noise_fft)))
+        dimension = np.sqrt(CoordsXY.xsize() * CoordsXY.ysize())
+        self.assertLess(np.abs(np.std(noise_image) - self.amplitude), 1.0 / dimension)
+
+
 def suite():
     """Return a suite containing all the test cases in this module."""
     utilsTests.init()
@@ -938,6 +993,7 @@ def suite():
     suites += unittest.makeSuite(BandpassTestCase)
     suites += unittest.makeSuite(StarGenTestCase)
     suites += unittest.makeSuite(StellarDistributionTestCase)
+    suites += unittest.makeSuite(SkyNoiseTestCase)
     suites += unittest.makeSuite(utilsTests.MemoryTestCase)
     return unittest.TestSuite(suites)
 
