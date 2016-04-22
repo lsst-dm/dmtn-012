@@ -233,9 +233,8 @@ class SingleSourceTestCase(utilsTests.TestCase):
 
     def test_single_source(self):
         """Test a single star with a single wavelength slice."""
-        data_file = "test_data/SingleSourceTest.pickle"
-        with open(data_file, 'rb') as dumpfile:
-            ref_image = cPickle.load(dumpfile)
+        data_file = "test_data/SingleSourceTest.npy"
+        ref_image = np.load(data_file)
         amplitude = self.amplitudes[0, 0]
         single_image = fast_dft(amplitude, self.x_loc, self.y_loc,
                                 x_size=self.x_size, y_size=self.y_size, kernel_radius=self.radius)
@@ -244,9 +243,8 @@ class SingleSourceTestCase(utilsTests.TestCase):
 
     def test_faint_source(self):
         """Test a single faint star with multiple wavelength slices, using a reduced kernel."""
-        data_file = "test_data/FaintSourceTest.pickle"
-        with open(data_file, 'rb') as dumpfile:
-            ref_image = cPickle.load(dumpfile)
+        data_file = "test_data/FaintSourceTest.npy"
+        ref_image = np.load(data_file)
         faint_image = fast_dft(self.amplitudes, self.x_loc, self.y_loc,
                                x_size=self.x_size, y_size=self.y_size, kernel_radius=self.radius)
         abs_diff_sum = 0.0
@@ -256,9 +254,8 @@ class SingleSourceTestCase(utilsTests.TestCase):
 
     def test_bright_source(self):
         """Test a single bright star with multiple wavelength slices, using all pixels."""
-        data_file = "test_data/BrightSourceTest.pickle"
-        with open(data_file, 'rb') as dumpfile:
-            ref_image = cPickle.load(dumpfile)
+        data_file = "test_data/BrightSourceTest.npy"
+        ref_image = np.load(data_file)
         bright_image = fast_dft(self.amplitudes, self.x_loc, self.y_loc,
                                 x_size=self.x_size, y_size=self.y_size, kernel_radius=self.x_size)
         abs_diff_sum = 0.0
@@ -298,9 +295,8 @@ class MultipleSourceTestCase(utilsTests.TestCase):
 
     def test_continuum_source(self):
         """Test stars with a single wavelength slice."""
-        data_file = "test_data/SingleSourceTestLarge.pickle"
-        with open(data_file, 'rb') as dumpfile:
-            ref_image = cPickle.load(dumpfile)
+        data_file = "test_data/SingleSourceTestLarge.npy"
+        ref_image = np.load(data_file)
         amplitude = self.amplitudes[:, 0]
         single_image = fast_dft(amplitude, self.x_loc, self.y_loc,
                                 x_size=self.x_size, y_size=self.y_size, kernel_radius=self.radius)
@@ -309,9 +305,8 @@ class MultipleSourceTestCase(utilsTests.TestCase):
 
     def test_faint_source(self):
         """Test faint stars with multiple wavelength slices, using a reduced kernel."""
-        data_file = "test_data/FaintSourceTestLarge.pickle"
-        with open(data_file, 'rb') as dumpfile:
-            ref_image = cPickle.load(dumpfile)
+        data_file = "test_data/FaintSourceTestLarge.npy"
+        ref_image = np.load(data_file)
         faint_image = fast_dft(self.amplitudes, self.x_loc, self.y_loc,
                                x_size=self.x_size, y_size=self.y_size, kernel_radius=self.radius)
         abs_diff_sum = 0.0
@@ -321,9 +316,8 @@ class MultipleSourceTestCase(utilsTests.TestCase):
 
     def test_bright_source(self):
         """Test bright stars with multiple wavelength slices, using all pixels."""
-        data_file = "test_data/BrightSourceTestLarge.pickle"
-        with open(data_file, 'rb') as dumpfile:
-            ref_image = cPickle.load(dumpfile)
+        data_file = "test_data/BrightSourceTestLarge.npy"
+        ref_image = np.load(data_file)
         bright_image = fast_dft(self.amplitudes, self.x_loc, self.y_loc,
                                 x_size=self.x_size, y_size=self.y_size, kernel_radius=self.x_size)
         abs_diff_sum = 0.0
@@ -338,7 +332,7 @@ def suite():
 
     suites = []
     suites += unittest.makeSuite(SingleSourceTestCase)
-    # suites += unittest.makeSuite(MultipleSourceTestCase)
+    suites += unittest.makeSuite(MultipleSourceTestCase)
     suites += unittest.makeSuite(utilsTests.MemoryTestCase)
     return unittest.TestSuite(suites)
 
