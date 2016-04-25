@@ -60,9 +60,10 @@ Noise may optionally be injected at any step, to simulate photon shot noise of t
 
 Several example images are shown below, which were produced using the included iPython notebook (in _python/sim_fast example).
 Each image contains the same catalog of 10,000 stars, consisting of 5124 K, 3303 G, 1255 F, 274 A, and 44 B type stars (which can be obtained with the example notebook by setting seed = 5). 
-For this simulation I have generated two LSST u-band images: a 'reference' image at an airmass of 1.00 near zenith that used a single plane, and a 'science' image at an airmass of 1.20 that used 23 planes (a wavelength resolution of 3nm).
-Each star in the simulation uses a simulated Kurucz SED from sims (https://github.com/lsst/sims_photUtils), and a Kolmogorov PSF from Galsim.
-The reference image shown in Figures 1 and 2 below took 36 seconds to generate on a single core of a 2015 Macbook, while the the science image took 128 seconds despite having to simulate all 23 planes.
+For this simulation I have generated two LSST u-band images: a 'reference' image at an airmass of 1.00 near zenith that used a single plane, and a 'science' image at an airmass of 1.20 that used 24 planes (a wavelength resolution of 3nm).
+Each star in the simulation uses a simulated Kurucz SED from sims_photUtils (https://github.com/lsst/sims_photUtils), and a Kolmogorov PSF from Galsim (https://github.com/GalSim-developers/GalSim).
+The initial simulation took ~70s on a single core of a 2015 MacBook Pro, and the science and reference images in Figures 1-3 each took an additional 30s to generate.
+Further images of the same field in the same band would also take 30s on this machine, regardless of the number of sources in the field or the observing conditions (noise, elevation, or azimuth angle). 
 The science image is not visually different from the reference image on either color scale so only the difference image is displayed in Figure 3. 
 Note that the very hot and bright B type stars have a DCR dipole in the opposite direction of the cooler stars, which is precisely what a DCR algorithm must be designed to correct.
 
@@ -99,7 +100,7 @@ These properties are matched to Kurucz model SEDs from GalSim, which are scaled 
 Alternately, a simple blackbody radiation spectrum (with the bandpass) can be used. 
 
 Each star is randomly placed within a simulated volume of observable space (a 1000ly cone) from which pixel coordinates and attenuation from distance are calculated, though no attempt is made to simulate realistic clustering.
-All of the random distributions, including stellar properties and coordinates, can be initialized from a user-supplied random number generator seed value, which allows for repeated simulations of the same patch of sky under different conditions. 
+All of the random distributions, including stellar properties and coordinates, can be initialized from a user-supplied random number generator seed value, which allows for repeated simulations of the same patch of sky in different wavelength bands or to reproduce previous results. 
 Simulated catalogs may also be returned and saved, so they may be modified by external tools if desired, and those saved catalogs may be supplied in place of generating a new random catalog from a seed.
 
 
@@ -144,7 +145,6 @@ Dipole Measurement
 
 Difference Imaging / Image Coaddition
 -------------------------------------
-Many realizations of the same sky can be constructed, under many different conditions 
 
 Transient Detection
 -------------------
