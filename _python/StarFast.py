@@ -1,35 +1,46 @@
-"""Function to generate simulated catalogs with reproduceable source spectra to feed into fast_dft."""
+"""
+StarFast is a simple but fast simulation tool to generate images for testing algorithms.
+It is optimized for creating many realizations of the same field of sky under different observing conditions.
+
+Four steps to set up the simulation:
+1) Create a StarSim object
+    example_sim = StarSim(options=options)
+2) Load a PSF with example_sim.load_psf(psf, options=options)
+    Example psf:
+        import galsim
+        gsp = galsim.GSParams(folding_threshold=1.0/x_size, maximum_fft_size=12288)
+        psf = galsim.Kolmogorov(fwhm=1.0, flux=1, gsparams=gsp)
+3) Create a simulated catalog of stars
+    example_sim.load_catalog(options=options)
+4) Build the raw sky model from the catalog
+    example_sim.simulate()
+
+The sky model can be used for many simulations of the same field under different conditions
+For each simulated observation convolve the raw sky model with the PSF, and include instrumental,
+atmospheric, etc... effects. If desired, a different psf may be supplied for each simulation.
+    observed_image = example_sim.convolve(psf=psf, options=options)
+"""
 from __future__ import print_function, division, absolute_import
 import numpy as np
-from numpy.fft import rfft2, irfft2, fftshift, ifftshift, fft2, ifft2
+from numpy.fft import rfft2, irfft2, fftshift
 from scipy import constants
 import lsst.afw.geom as afwGeom
 import lsst.afw.table as afwTable
-from lsst.sims.photUtils import Bandpass, matchStar  # , Sed, PhotometricParameters
+from lsst.sims.photUtils import Bandpass, matchStar
 from lsst.utils import getPackageDir
-# from lsst.sims.photUtils import matchStar
-# import lsst.afw.image as afwImage
 from calc_refractive_index import diff_refraction
 from fast_dft import fast_dft
 import time
 import unittest
 import lsst.utils.tests as utilsTests
-photons_per_adu = 1e4  # used only to approximate the effect of photon shot noise, if photon_noise=True
 
 
 class StarSim:
     """Class that defines a random simulated region of sky, and allows fast transformations."""
 
-    def __init__(self, psf=None, pixel_scale=0.25, pad_image=1.5, catalog=None,
-                 x_size=512, y_size=512, band_name='g', sed_list=None,
-                 astrometric_error=None, edge_dist=None, kernel_radius=None, **kwargs):
+    def __init__(self, psf=None, pixel_scale=0.25, pad_image=1.5, catalog=None, sed_list=None,
+                 x_size=512, y_size=512, band_name='g', photons_per_adu=1e4, **kwargs):
         """Set up the fixed parameters of the simulation."""
-        # if psf is None:
-        #     import galsim
-        #     self.psf = galsim.Kolmogorov(fwhm=1)
-        # else:
-        #     self.psf = psf
-
         bandpass = _load_bandpass(band_name=band_name, **kwargs)
         self.n_step = int(np.ceil((bandpass.wavelen_max - bandpass.wavelen_min) / bandpass.wavelen_step))
         self.bandpass = bandpass
@@ -40,53 +51,37 @@ class StarSim:
         self.sed_list = sed_list
         self.catalog = catalog
         self.coord = _CoordsXY(pixel_scale=pixel_scale, pad_image=pad_image, x_size=x_size, y_size=y_size)
+        if psf is not None:
+            self.load_psf(psf, **kwargs)
+        self.edge_dist = None
+        self.kernel_radius = None
+        self.source_model = None
+        self.bright_model = None
+        self.n_star = None
+        self.photons_per_adu = photons_per_adu  # used to approximate the effect of photon shot noise.
+
+    def load_psf(self, psf, edge_dist=None, kernel_radius=None,):
+        """Load a PSF class from galsim. The class needs to have two methods, getFWHM() and drawImage()."""
         fwhm_to_sigma = 1.0 / (2.0 * np.sqrt(2. * np.log(2)))
+        self.psf = psf
         CoordsXY = self.coord
-        if edge_dist is None:
+        kernel_min_radius = np.ceil(5 * psf.getFWHM() * fwhm_to_sigma / CoordsXY.scale())
+        if self.kernel_radius < kernel_min_radius:
+            self.kernel_radius = kernel_min_radius
+        if self.edge_dist is None:
             if CoordsXY.pad > 1:
                 self.edge_dist = 0
             else:
                 self.edge_dist = 5 * psf.getFWHM() * fwhm_to_sigma / CoordsXY.scale()
-        if kernel_radius is None:
-            self.kernel_radius = np.ceil(5 * psf.getFWHM() * fwhm_to_sigma / CoordsXY.scale())
-        else:
-            self.kernel_radius = kernel_radius
-        self.psf = psf
-        if psf is not None:
-            self.load_psf(psf, **kwargs)
-        self.source_model = None
-        self.bright_model = None
-        self.n_star = None
-
-    def load_psf(self, psf, edge_dist=None, kernel_radius=None, **kwargs):
-        # I think most PSF classes have a getFWHM method. The math converts to a sigma for a gaussian.
-        fwhm_to_sigma = 1.0 / (2.0 * np.sqrt(2. * np.log(2)))
-        CoordsXY = self.coord
-        if edge_dist is None:
-            if CoordsXY.pad > 1:
-                edge_dist = 0
-            else:
-                edge_dist = 5 * psf.getFWHM() * fwhm_to_sigma / CoordsXY.scale()
-        self.psf = psf
-        CoordsXY.set_oversample(2)
-        psf_image_bright = psf.drawImage(scale=CoordsXY.scale(), method='fft', offset=(0, 0),
-                                         nx=CoordsXY.xsize(), ny=CoordsXY.ysize(), use_true_center=False)
-        CoordsXY.set_oversample(1)
-        psf_image = psf.drawImage(scale=CoordsXY.scale(), method='fft', offset=(0, 0),
-                                  nx=CoordsXY.xsize(), ny=CoordsXY.ysize(), use_true_center=False)
-        self.psf_ft = {1: fft2(psf_image.array), 2: fft2(psf_image_bright.array)}
-        self.edge_dist = edge_dist
-        self.kernel_radius = np.ceil(5 * psf.getFWHM() * fwhm_to_sigma / CoordsXY.scale())
 
     def load_catalog(self, name=None, sed_list=None, n_star=None, **kwargs):
         """Load or generate a catalog of stars to be used for the simulations."""
         bright_sigma_threshold = 3.0
         bright_flux_threshold = 0.1
         CoordsXY = self.coord
-        if self.catalog is None:
-            self.catalog = _cat_sim(x_size=CoordsXY.xsize(base=True), y_size=CoordsXY.ysize(base=True),
-                                    name=name, n_star=n_star, pixel_scale=CoordsXY.pixel_scale,
-                                    edge_distance=self.edge_dist, **kwargs)
+        self.catalog = _cat_sim(x_size=CoordsXY.xsize(base=True), y_size=CoordsXY.ysize(base=True),
+                                name=name, n_star=n_star, pixel_scale=CoordsXY.pixel_scale,
+                                edge_distance=self.edge_dist, **kwargs)
         schema = self.catalog.getSchema()
         n_star = len(self.catalog)
         self.n_star = n_star
@@ -187,7 +182,7 @@ class StarSim:
             rand_gen = np.random
             if seed is not None:
                 rand_gen.seed(seed - 1.2)
-            sky_photons = np.sqrt(np.abs(return_image * photons_per_adu)) / photons_per_adu
+            sky_photons = np.sqrt(np.abs(return_image * self.photons_per_adu)) / self.photons_per_adu
             return_image += sky_photons * rand_gen.normal(scale=photon_noise, size=return_image.shape)
 
         if instrument_noise > 0:
@@ -207,6 +202,8 @@ class StarSim:
         convol = np.zeros((CoordsXY.ysize(), CoordsXY.xsize() // 2 + 1), dtype='complex64')
         if psf is None:
             psf = self.psf
+        if self.psf is None:
+            self.load_psf(psf)
         timing_fft = -time.time()
 
         for _i, offset in enumerate(dcr_gen):
@@ -588,6 +585,7 @@ def _stellar_distribution(seed=None, n_star=None, hottest_star='A', coolest_star
     metallicity is logarithmic metallicity relative to solar
     surface gravity relative to solar
     """
+    # Percent abundance of stellar types M,K,G,F,A,B,O 
     star_prob = [76.45, 12.1, 7.6, 3, 0.6, 0.13, 3E-5]
     # Relative to Solar luminosity. Hotter stars are brighter on average.
     luminosity_scale = [(0.01, 0.08), (0.08, 0.6), (0.6, 1.5), (1.5, 5.0), (5.0, 100.0), (100.0, 30000.0),
@@ -971,6 +969,10 @@ class SkyNoiseTestCase(utilsTests.TestCase):
         self.n_step = 3
         self.amplitude = 1.0
         self.seed = 3
+
+    def tearDown(self):
+        """Clean up."""
+        del self.coord
 
     def test_noise_sigma(self):
         """The sky noise should be normalized such that the standard deviation of the image == amplitude."""
