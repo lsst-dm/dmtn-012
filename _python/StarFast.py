@@ -51,16 +51,16 @@ class StarSim:
         self.sed_list = sed_list
         self.catalog = catalog
         self.coord = _CoordsXY(pixel_scale=pixel_scale, pad_image=pad_image, x_size=x_size, y_size=y_size)
-        if psf is not None:
-            self.load_psf(psf, **kwargs)
         self.edge_dist = None
         self.kernel_radius = None
+        if psf is not None:
+            self.load_psf(psf, **kwargs)
         self.source_model = None
         self.bright_model = None
         self.n_star = None
         self.photons_per_adu = photons_per_adu  # used to approximate the effect of photon shot noise.
 
-    def load_psf(self, psf, edge_dist=None, kernel_radius=None,):
+    def load_psf(self, psf, edge_dist=None, kernel_radius=None, **kwargs):
         """Load a PSF class from galsim. The class needs to have two methods, getFWHM() and drawImage()."""
         fwhm_to_sigma = 1.0 / (2.0 * np.sqrt(2. * np.log(2)))
         self.psf = psf
