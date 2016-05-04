@@ -54,7 +54,7 @@ For wavelength-dependent effects such as DCR, each band is divided into multiple
 Sources are convolved with the PSF in Fourier space (but see :ref:`section-headings-implementation` below for details), and any sub-band planes are stacked to produce the final image. 
 Noise may optionally be injected at any step, to simulate photon shot noise of the sources, flat spectrum sky noise, or noise from the electronics.
 
-Several example images are shown below, which were produced using the included iPython notebook (https://github.com/lsst-dm/dmtn-012/blob/master/_python/StarFast_example.ipynb).
+Several example images are shown below, which were produced using the included iPython notebook (https://github.com/lsst-dm/starfast_simulator/blob/master/StarFast_example.ipynb).
 Each image uses the same catalog of 10,000 stars, consisting of 5124 K, 3303 G, 1255 F, 274 A, and 44 B type stars (which can be obtained with the example notebook by setting seed = 5). 
 For this simulation I have generated two LSST u-band images: a 'reference' image at an airmass of 1.00 near zenith that used a single plane, and a 'science' image at an airmass of 1.20 that used 24 planes (a wavelength resolution of 3nm).
 Each star in the simulation uses a simulated Kurucz SED from sims_photUtils (https://github.com/lsst/sims_photUtils), and a Kolmogorov PSF from Galsim (https://github.com/GalSim-developers/GalSim).
