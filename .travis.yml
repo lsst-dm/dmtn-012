@@ -1,8 +1,20 @@
 sudo: false
 language: python
-python:
-      - 3.4
-install: "pip install -r requirements.txt"
-script: "make html"
-notifications:
-      email: false
+matrix:
+  include:
+    - python: "3.5"
+      env: LTD_MASON_BUILD=true
+install:
+  - pip install -r requirements.txt
+  - pip install "ltd-mason>=0.2,<0.3"
+script:
+  - sphinx-build -b html -a -n -d _build/doctree . _build/html
+after_success:
+  - ltd-mason-travis --html-dir _build/html
+env:
+  global:
+    - LTD_MASON_BUILD=false  # disable builds in regular text matrix
+    - LTD_MASON_PRODUCT="dmtn-012"
+    # Add AWS and LTD Keeper credentials as encrypted secrets here
+    - secure: "uGqd1Pr4T2rE/Y45Q+uu8De2x0bWoXW30tOTjUo+CZRqmsqEScoK2Z5nRtY6ukOGc4Rz9kAPKCaNt+kaHLth5ZVN9B1FmLhwyLYjnK1Usti4y3/VwRgGut1VB3r7QtQe+1UzrJFib1n/gr8VYJOhva2iXV1EakE/Yje0OIdGQlEPR9vrE8du+0dn39u93wCZu7uIUNjQo12cNFLQ7QjOaYYssGpYlUEips8xAFNpC774sGIdvHSFTA+MSd3d4iyHg90f2BRGaLRMuE2R09nLXb6O0SyYUEv3KIv8cntynBuWgnMvoLbWq7Ws2n5/42gRthfYVuxLFPcptCxeIQ2kT2fLvFGMUkAtkShyEJVKDMLvKBMZjsxqC7mlfVgQiRE4Kr9qjo5h7IROlO5kAkpAkHR7UVKQKjUiUmQ49Jn/I9fU5teO8rq464vLs/ez5PPb1ViFZSeX8AKKOzs9Nkh/wu/R1bOLZ7/CGD8OR9bYJvzUX81XYcLK3sG9E6/j4o8tdJMMK2qfgEkf8S2jWniXio8JoPCqBAptoarv6KpK0x1+9Ha93X2o1wgFRJ1gLGWuFIm69qC08XVS1+J2fOOETSwtpBS4dakxaWYIXBa0bYB3imbttQigZmSAZoPvItPagwNIupncuFy1gDQwjkuNU7J2oRn9kJjsKIZ5AxWj+zs="
+    - secure: "ifE5nbtDrnp9MP6WZA/SvRcZz2axQiATcSVWNKFUJNWuKMS/ByH3l2i2FhZP1LAM5dAf+dchOO+mJQeBJUOSvKbdUmB/3HUGXqjOwvt3EYdkGw1fmxzudTaCVysO2gEhLhITRwITsvYsEupwr6DHY7JX0Vd3qJEOIJCHRayABCRAAI9hoYJMro5Qnrd5HJhlVmgme09hW+26izYmh8WLrgj08mkrz7jDDvW37AY+erxvn4X+piRiWnVF9edjW8UKwUIrjQb3EhfZYlakD8sK6tgIXy5J2caAQJgI7yv2ID1KxQ+npblYFxuRZSZEK3CNAaSF03kiGGV7+eAJASMg/k6YZhxzIZ6WA+zscs420neEfR1xutw5FMKSBc5b60TdhikGROsLViFOcANOk2QcNStSzFev8c6GrrvnEDZljyVkhtf0yJEwB6FASJ3QZbezcUzDEXGcc/upnnBlg8WF2ljHtRqlzX5D3nAgHLQvTplIR8rhBFBLBoUfL5+Be43sQJlmkg10inswABqUerxWN+9KqpRJqZEfaiXD34IpdeI4gFEXqQTKQUaWDG/YKeWmhXd3zbFd8bCy4F9SgJB5372SOeA/1a0IoxsN2cwgL6pvbBHdCZPcFy/uS+UKoWiKpp1AsAnirgkgYdcHrMSzB0LAZj/GGFt7MZAkSBBM0Oc="
